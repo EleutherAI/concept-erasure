@@ -45,28 +45,32 @@ class ConceptEraser(nn.Module):
         self.register_buffer("n", torch.tensor(0, device=device, dtype=dtype))
 
     def forward(self, x: Tensor) -> Tensor:
-        """Remove the subspace responsible for correlations between x and y."""
-        *_, d, _ = self.xcov_M2.shape
+        """Minimally edit `x` to remove correlations with the target concepts.
+
+        Args:
+            x: Representations of shape (..., x_dim).
+
+        Returns:
+            The edited representations of shape (..., x_dim).
+        """
+        d, _ = self.xcov_M2.shape
         assert self.n > 0, "Call update() before forward()"
         assert x.shape[-1] == d
 
         # First center the input
         x_ = x - self.mean_x
-
-        # Remove the subspace. We treat x_ as a batch of (1 x d) vectors
-        proj = (x_[..., None, :] @ self.u) @ self.u.mT
-        x_ -= proj.squeeze(-2)
+        # Then remove the subspace
+        x_ -= x_ @ self.u @ self.u.mT
 
         return x_
 
     @torch.no_grad()
     def update(self, x: Tensor, y: Tensor) -> "ConceptEraser":
         """Update the running statistics with a new batch of data."""
-        *_, d, c = self.xcov_M2.shape
-
+        d, c = self.xcov_M2.shape
         x = x.reshape(-1, d).type_as(self.mean_x)
 
-        n, *_, d2 = x.shape
+        n, d2 = x.shape
         assert d == d2, f"Unexpected number of features {d2}"
 
         # y might start out 1D, but we want to treat it as 2D
@@ -93,6 +97,9 @@ class ConceptEraser(nn.Module):
             self.u, _, _ = torch.svd_lowrank(self.xcov, q=self.rank)
 
         return self
+
+    # When there's only one batch of data, "fit" is a synonym for "update"
+    fit = update
 
     @property
     def P(self) -> Tensor:
