@@ -62,6 +62,8 @@ class ConceptEraser(nn.Module):
         # Then remove the subspace
         x_ -= x_ @ self.u @ self.u.mT
 
+        # TODO: Support undoing the centering step; this would require changing the
+        # tests a bit
         return x_
 
     @torch.no_grad()
@@ -87,7 +89,7 @@ class ConceptEraser(nn.Module):
         self.mean_y += delta_y.sum(dim=0) / self.n
         delta_y2 = y - self.mean_y
 
-        self.xcov_M2 += torch.einsum("b...m,b...n->...mn", delta_x, delta_y2)
+        self.xcov_M2.addmm_(delta_x.mT, delta_y2)
         if self.y_dim == self.rank:
             # When we're entirely erasing the subspace, we can use QR instead of SVD to
             # get an orthonormal basis for the column space of the xcov matrix
