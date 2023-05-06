@@ -18,9 +18,7 @@ def test_stats():
 
     # Generate random data
     torch.manual_seed(42)
-    x_data = [
-        torch.randn(batch_size, num_features) for _ in range(num_batches)
-    ]
+    x_data = [torch.randn(batch_size, num_features) for _ in range(num_batches)]
     y_data = [
         torch.randint(0, num_classes, (batch_size, num_classes))
         for _ in range(num_batches)

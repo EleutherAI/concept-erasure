@@ -3,7 +3,7 @@ from torch import Tensor, nn
 
 
 class ConceptEraser(nn.Module):
-    """Minimally edits features to prevent linear adversaries from detecting a concept."""
+    """Minimally edit features to make specified concepts linearly undetectable."""
 
     mean_x: Tensor
     """Running mean of X."""
@@ -35,9 +35,7 @@ class ConceptEraser(nn.Module):
         self.x_dim = x_dim
         self.rank = rank or y_dim
 
-        self.register_buffer(
-            "mean_x", torch.zeros(x_dim, device=device, dtype=dtype)
-        )
+        self.register_buffer("mean_x", torch.zeros(x_dim, device=device, dtype=dtype))
         self.register_buffer("mean_y", self.mean_x.new_zeros(y_dim))
         self.register_buffer("u", self.mean_x.new_zeros(x_dim, self.rank))
         self.register_buffer(
