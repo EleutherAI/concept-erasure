@@ -3,6 +3,7 @@ import pytest
 import torch
 from sklearn.datasets import make_classification
 from sklearn.linear_model import LogisticRegression
+from sklearn.svm import LinearSVC
 
 from concept_erasure import ConceptEraser
 
@@ -64,9 +65,11 @@ def test_projection(num_classes: int):
 
     eraser = ConceptEraser.fit(X_t, Y_t)
     X_ = eraser(X_t)
+    X_np = X_.numpy()
 
     # Heuristic threshold for singular values taken from torch.linalg.pinv
-    eps = max(n, d) * torch.finfo(X_.dtype).eps
+    small = torch.finfo(X_.dtype).eps
+    eps = max(n, d) * small
 
     # Check that the rank of the update is num_classes + 1
     # The +1 comes from subtracting the mean before projection
@@ -74,7 +77,7 @@ def test_projection(num_classes: int):
     torch.testing.assert_close(rank, torch.tensor(num_classes + 1.0))
 
     # Compute class means and check that they are equal after the projection
-    class_means_ = [X_.numpy()[Y == c].mean(axis=0) for c in range(num_distinct)]
+    class_means_ = [X_np[Y == c].mean(axis=0) for c in range(num_distinct)]
     np.testing.assert_almost_equal(class_means_[1:], class_means_[:-1])
 
     # Sanity check that class means are NOT equal before the projection
@@ -82,11 +85,32 @@ def test_projection(num_classes: int):
     assert not np.allclose(class_means[1:], class_means[:-1])
 
     # Logistic regression should not be able to learn anything
-    null_lr = LogisticRegression(max_iter=1000, tol=0.0).fit(X_.numpy(), Y)
+    null_lr = LogisticRegression(max_iter=1000, tol=0.0).fit(X_np, Y)
     beta = torch.from_numpy(null_lr.coef_)
     assert beta.norm(p=torch.inf) < eps
 
     # Sanity check that it DOES learn something before the projection
     real_lr = LogisticRegression(max_iter=1000).fit(X, Y)
     beta = torch.from_numpy(real_lr.coef_)
+    assert beta.norm(p=torch.inf) > 0.1
+
+    # Linear SVM shouldn't be able to learn anything either
+    null_svm = LinearSVC(
+        # The dual formulation injects random noise into the solution
+        dual=False,
+        # Unfortunately the intercept is subject to L2 regularization; setting this
+        # to a large value largely cancels out the effect. Regularizing the intercept
+        # to be smaller can cause the coefficients to get larger than they should be.
+        intercept_scaling=1e6,
+        max_iter=1000,
+        tol=small,
+    ).fit(X_np, Y)
+    beta = torch.from_numpy(null_svm.coef_)
+    assert beta.norm(p=torch.inf) < eps
+
+    # But it should learn something before the projection
+    real_svm = LinearSVC(
+        dual=False, intercept_scaling=1e6, max_iter=1000, tol=small
+    ).fit(X, Y)
+    beta = torch.from_numpy(real_svm.coef_)
     assert beta.norm(p=torch.inf) > 0.1
