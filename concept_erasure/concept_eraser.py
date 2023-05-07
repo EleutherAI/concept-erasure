@@ -20,6 +20,14 @@ class ConceptEraser(nn.Module):
     n: Tensor
     """Number of samples seen so far."""
 
+    @classmethod
+    def fit(cls, x: Tensor, y: Tensor, rank: int | None = None) -> "ConceptEraser":
+        """Convenience method to fit a ConceptEraser on data and return it."""
+        n, d = x.shape
+        _, k = y.reshape(n, -1).shape
+
+        return cls(d, k, device=x.device, dtype=x.dtype, rank=rank).update(x, y)
+
     def __init__(
         self,
         x_dim: int,
@@ -99,9 +107,6 @@ class ConceptEraser(nn.Module):
             self.u, _, _ = torch.svd_lowrank(self.xcov, q=self.rank)
 
         return self
-
-    # When there's only one batch of data, "fit" is a synonym for "update"
-    fit = update
 
     @property
     def P(self) -> Tensor:

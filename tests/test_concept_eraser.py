@@ -4,7 +4,7 @@ import torch
 from sklearn.datasets import make_classification
 from sklearn.linear_model import LogisticRegression
 
-from concept_erasure import ConceptEraser, to_one_hot
+from concept_erasure import ConceptEraser
 
 
 def test_stats():
@@ -60,9 +60,9 @@ def test_projection(num_classes: int):
     X_t = torch.from_numpy(X)
     Y_t = torch.from_numpy(Y)
     if num_classes > 1:
-        Y_t = to_one_hot(Y_t, num_classes)
+        Y_t = torch.nn.functional.one_hot(Y_t, num_classes)
 
-    eraser = ConceptEraser(d, num_classes, dtype=torch.float64).update(X_t, Y_t)
+    eraser = ConceptEraser.fit(X_t, Y_t)
     X_ = eraser(X_t)
 
     # Heuristic threshold for singular values taken from torch.linalg.pinv

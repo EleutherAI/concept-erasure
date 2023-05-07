@@ -25,7 +25,7 @@ real_lr = LogisticRegression(max_iter=1000).fit(X, Y)
 beta = torch.from_numpy(real_lr.coef_)
 assert beta.norm(p=torch.inf) > 0.1
 
-eraser = ConceptEraser(d, k - 1, dtype=torch.float64).update(X_t, Y_t)
+eraser = ConceptEraser.fit(X_t, Y_t)
 X_ = eraser(X_t)
 
 # But learns absolutely nothing after
