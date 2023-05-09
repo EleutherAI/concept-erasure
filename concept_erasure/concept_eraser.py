@@ -65,14 +65,10 @@ class ConceptEraser(nn.Module):
         assert self.n > 0, "Call update() before forward()"
         assert x.shape[-1] == d
 
-        # First center the input
-        x_ = x - self.mean_x
-        # Then remove the subspace
-        x_ -= x_ @ self.u @ self.u.mT
-
-        # TODO: Support undoing the centering step; this would require changing the
-        # tests a bit
-        return x_
+        # Remove the subspace. We want to make sure we do this in a way that keeps the
+        # unconditional mean of the data exactly the same.
+        delta = (x - self.mean_x) @ self.u @ self.u.mT
+        return x - delta
 
     @torch.no_grad()
     def update(self, x: Tensor, y: Tensor) -> "ConceptEraser":
