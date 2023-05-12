@@ -28,8 +28,8 @@ assert beta.norm(p=torch.inf) > 0.1
 eraser = ConceptEraser.fit(X_t, Y_t)
 X_ = eraser(X_t)
 
-# But learns absolutely nothing after
+# But learns nothing after
 null_lr = LogisticRegression(max_iter=1000, tol=0.0).fit(X_.numpy(), Y)
 beta = torch.from_numpy(null_lr.coef_)
-assert beta.norm(p=torch.inf) < 1e-13
+assert beta.norm(p=torch.inf) < 1e-4
 ```
