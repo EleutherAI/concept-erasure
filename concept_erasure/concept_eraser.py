@@ -167,9 +167,9 @@ class ConceptEraser(nn.Module):
 
         # Adjust Q to account for the covariance of X
         else:
-            # Full formula: P = Sigma @ Q (Q @ Sigma @ Q)^+ Q
+            # Full formula: P = Σ (Q Σ Q)^+
             sigma = self.cov_x.diag_embed() if self.cov_type == "diag" else self.cov_x
-            self._P = sigma @ Q @ torch.linalg.pinv(Q @ sigma @ Q, hermitian=True) @ Q
+            self._P = sigma @ torch.linalg.pinv(Q @ sigma @ Q, hermitian=True)
 
         return self._P
 

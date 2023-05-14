@@ -70,9 +70,7 @@ def test_projection(num_classes: int):
     else:
         Y_1h = Y_t
 
-    # Heuristic threshold for singular values taken from torch.linalg.pinv
-    small = torch.finfo(X_t.dtype).eps
-    eps = max(n, d) * small
+    eps = 1e-9
     mse_dict: dict[str, float] = {}
 
     for cov_type in ("eye", "diag", "full"):
@@ -134,12 +132,12 @@ def test_projection(num_classes: int):
             # to a large value largely cancels out the effect. Regularizing the
             # intercept can cause the coefficients to get larger than they should be.
             intercept_scaling=1e6,
-            tol=small,
+            tol=eps,
         ).fit(X_np, Y)
         assert abs(null_svm.coef_).max() < eps
 
         # But it should learn something before the projection
-        real_svm = LinearSVC(dual=False, intercept_scaling=1e6, tol=small).fit(X, Y)
+        real_svm = LinearSVC(dual=False, intercept_scaling=1e6, tol=eps).fit(X, Y)
         assert abs(real_svm.coef_).max() > 0.1
 
     # Check that using cov_type="full" strictly better than "eye"
