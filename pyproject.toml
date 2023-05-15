@@ -11,6 +11,8 @@ keywords = ["fairness", "interpretability", "explainable-ai"]
 license = {text = "MIT License"}
 dependencies = [
     "torch",
+    # 4.0 introduced the breaking change of using return_dict=True by default
+    "transformers>=4.0.0",
 ]
 version = "0.0.1"
 

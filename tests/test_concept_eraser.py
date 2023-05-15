@@ -38,10 +38,10 @@ def test_stats():
     y_centered = y_all - mean_y
 
     expected_cov = torch.einsum("b...m,b...n->...mn", x_centered, x_centered)
-    expected_cov /= batch_size * num_batches
+    expected_cov /= batch_size * num_batches - 1
 
     expected_xcov = torch.einsum("b...m,b...n->...mn", x_centered, y_centered)
-    expected_xcov /= batch_size * num_batches
+    expected_xcov /= batch_size * num_batches - 1
 
     # Compare the computed cross-covariance matrix with the expected one
     torch.testing.assert_close(eraser.cov_x, expected_cov)

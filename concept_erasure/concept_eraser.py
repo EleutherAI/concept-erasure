@@ -13,17 +13,17 @@ class ConceptEraser(nn.Module):
     mean_y: Tensor
     """Running mean of Y."""
 
-    u: Tensor
-    """Orthonormal basis of the subspace to remove."""
-
     xcov_M2: Tensor
     """Unnormalized cross-covariance matrix X^T Y."""
 
     x_M2: Tensor | None
     """Unnormalized covariance matrix X^T X."""
 
-    n: Tensor
-    """Number of samples seen so far."""
+    n_x: Tensor
+    """Number of X samples seen so far."""
+
+    n_y: Tensor
+    """Number of Y samples seen so far."""
 
     _P: Tensor | None
     """Cached projection matrix, computed lazily."""
@@ -53,6 +53,7 @@ class ConceptEraser(nn.Module):
         device: str | torch.device | None = None,
         dtype: torch.dtype | None = None,
         rank: int | None = None,
+        shrinkage: float = 0.0,
     ):
         super().__init__()
 
@@ -60,15 +61,17 @@ class ConceptEraser(nn.Module):
         self.x_dim = x_dim
         self.cov_type = cov_type
         self.rank = rank or y_dim
+        self.shrinkage = shrinkage
 
         self.register_buffer("mean_x", torch.zeros(x_dim, device=device, dtype=dtype))
         self.register_buffer("mean_y", self.mean_x.new_zeros(y_dim))
-        self.register_buffer("u", self.mean_x.new_zeros(x_dim, self.rank))
         self.register_buffer(
             "xcov_M2",
             self.mean_x.new_zeros(x_dim, y_dim),
         )
-        self.register_buffer("n", torch.tensor(0, device=device, dtype=dtype))
+        self.register_buffer("n_x", torch.tensor(0, device=device, dtype=dtype))
+        self.register_buffer("n_y", torch.tensor(0, device=device, dtype=dtype))
+
         if self.cov_type == "full":
             M2 = self.mean_x.new_zeros(x_dim, x_dim)
         elif self.cov_type == "diag":
@@ -80,6 +83,14 @@ class ConceptEraser(nn.Module):
 
         self.register_buffer("x_M2", M2)
 
+    def clear_x(self):
+        """Clear the running statistics of X."""
+        self.n_x.zero_()
+        self.mean_x.zero_()
+
+        if self.x_M2 is not None:
+            self.x_M2.zero_()
+
     def forward(self, x: Tensor) -> Tensor:
         """Minimally edit `x` to remove correlations with the target concepts.
 
@@ -90,35 +101,52 @@ class ConceptEraser(nn.Module):
             The edited representations of shape (..., x_dim).
         """
         d, _ = self.xcov_M2.shape
-        assert self.n > 0, "Call update() before forward()"
+        assert self.n_x > 0, "Call update() before forward()"
         assert x.shape[-1] == d
 
+        return (x - self.mean_x) @ self.P.T + self.mean_x
+
+    def proj_for_subspace(self, u: Tensor) -> Tensor:
+        """Compute MSE-optimal projection matrix given orthonormal basis `u`."""
+        # Compute the orthogonal projection matrix w.r.t. the Euclidean inner product
+        eye = torch.eye(self.x_dim, device=u.device, dtype=u.dtype)
+        Q = eye - u @ u.mT
+
+        # We're not keeping track of covariance statistics, so we just use Q directly
         if self.cov_type == "eye":
-            # Remove the subspace. We want to make sure we do this in a way that keeps
-            # the unconditional mean of the data exactly the same.
-            delta = (x - self.mean_x) @ self.u @ self.u.mT
-            return x - delta
+            return Q
+
+        # Adjust Q to account for the covariance of X
         else:
-            return x @ self.P.T + (self.mean_x - self.mean_x @ self.P.T)
+            sigma = self.cov_x.diag_embed() if self.cov_type == "diag" else self.cov_x
+
+            # Manual Moore-Penrose pseudoinverse
+            vals, vecs = torch.linalg.eigh(Q @ sigma @ Q)
+            vals_inv = vals.reciprocal().where(vals > 1e-3, 0.0)
+            pinv = vecs @ vals_inv.diag_embed() @ vecs.mT
+
+            return sigma @ pinv
 
     @torch.no_grad()
-    def update(self, x: Tensor, y: Tensor) -> "ConceptEraser":
-        """Update the running statistics with a new batch of data."""
+    def update(self, x: Tensor, y: Tensor | None = None) -> "ConceptEraser":
+        """Update the running statistics with a new batch of data.
+
+        It's possible to call this method without `y` if you only want to update the
+        statistics of X. This is useful if you don't have labels but want to adjust the
+        mean and covariance of X to match a new dataset.
+        """
         d, c = self.xcov_M2.shape
         x = x.reshape(-1, d).type_as(self.mean_x)
 
         n, d2 = x.shape
         assert d == d2, f"Unexpected number of features {d2}"
 
-        # y might start out 1D, but we want to treat it as 2D
-        y = y.reshape(n, -1).type_as(x)
-        assert y.shape[-1] == c, f"Unexpected number of classes {y.shape[-1]}"
-
-        self.n += n
+        # We always have an X, we might not have a Y
+        self.n_x += n
 
         # Welford's online algorithm
         delta_x = x - self.mean_x
-        self.mean_x += delta_x.sum(dim=0) / self.n
+        self.mean_x += delta_x.sum(dim=0) / self.n_x
         delta_x2 = x - self.mean_x
 
         # Update the covariance matrix of X if needed
@@ -132,59 +160,63 @@ class ConceptEraser(nn.Module):
             elif self.cov_type == "diag":
                 self.x_M2.add_(delta_x2.pow(2).sum(dim=0))
 
-        delta_y = y - self.mean_y
-        self.mean_y += delta_y.sum(dim=0) / self.n
-        delta_y2 = y - self.mean_y
-
-        self.xcov_M2.addmm_(delta_x.mT, delta_y2)
-
         # Invalidate the cached projection matrix
         self._P = None
-        if self.y_dim == self.rank:
-            # When we're entirely erasing the subspace, we can use QR instead of SVD to
-            # get an orthonormal basis for the column space of the xcov matrix
-            self.u, _ = torch.linalg.qr(self.xcov)
-        else:
-            # We only want to erase the highest energy part of the subspace
-            self.u, _, _ = torch.svd_lowrank(self.xcov, q=self.rank)
+
+        # We do have labels, so we can update the Y statistics
+        if y is not None:
+            # y might start out 1D, but we want to treat it as 2D
+            y = y.reshape(n, -1).type_as(x)
+            assert y.shape[-1] == c, f"Unexpected number of classes {y.shape[-1]}"
+
+            self.n_y += n
+
+            delta_y = y - self.mean_y
+            self.mean_y += delta_y.sum(dim=0) / self.n_x
+            delta_y2 = y - self.mean_y
+
+            # Update the cross-covariance matrix
+            self.xcov_M2.addmm_(delta_x.mT, delta_y2)
 
         return self
 
     @property
     def P(self) -> Tensor:
         """Projection matrix for removing the subspace."""
-        # Check if we've cached this result before
-        if self._P is not None:
-            return self._P
+        # Compute the projection matrix if we haven't already
+        if self._P is None:
+            if self.y_dim == self.rank:
+                # Get an orthonormal basis for the column space of the xcov matrix
+                u, _ = torch.linalg.qr(self.xcov)
+            else:
+                # We only want to erase the highest energy part of the subspace
+                u, _, _ = torch.svd_lowrank(self.xcov, q=self.rank)
 
-        # Compute the orthogonal projection matrix w.r.t. the Euclidean inner product
-        eye = torch.eye(self.x_dim, device=self.u.device, dtype=self.u.dtype)
-        Q = eye - self.u @ self.u.mT
-
-        # We're not keeping track of covariance statistics, so we just use Q directly
-        if self.cov_type == "eye":
-            self._P = Q
-
-        # Adjust Q to account for the covariance of X
-        else:
-            # Full formula: P = Σ (Q Σ Q)^+
-            sigma = self.cov_x.diag_embed() if self.cov_type == "diag" else self.cov_x
-            self._P = sigma @ torch.linalg.pinv(Q @ sigma @ Q, hermitian=True)
+            self._P = self.proj_for_subspace(u)
 
         return self._P
 
     @property
     def cov_x(self) -> Tensor:
         """The covariance matrix of X, or its diagonal if `cov_type == 'diag'`."""
-        assert self.n > 0, "Call update() before accessing cov_x"
+        assert self.n_x > 1, "Call update() before accessing cov_x"
         assert (
             self.x_M2 is not None
         ), "Can't compute covariance matrix for cov_type='eye'"
 
-        return self.x_M2 / self.n
+        cov = self.x_M2 / (self.n_x - 1)
+        if self.shrinkage > 0.0:
+            cov *= 1 - self.shrinkage
+
+            if self.cov_type == "diag":
+                cov.add_(self.shrinkage)
+            elif self.cov_type == "full":
+                torch.linalg.diagonal(cov).add_(self.shrinkage)
+
+        return cov
 
     @property
     def xcov(self) -> Tensor:
         """The cross-covariance matrix."""
-        assert self.n > 0, "Call update() before accessing cov_x"
-        return self.xcov_M2 / self.n
+        assert self.n_y > 1, "Call update() with labels before accessing xcov"
+        return self.xcov_M2 / (self.n_y - 1)
