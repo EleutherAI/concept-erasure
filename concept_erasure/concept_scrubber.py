@@ -5,10 +5,10 @@ from torch import Tensor, nn
 from transformers import PreTrainedModel
 
 from .concept_eraser import ConceptEraser
-from .utils import get_transformer_layers
+from .utils import assert_type, get_transformer_layers
 
 
-class ConceptScrubber:
+class ConceptScrubber(nn.Module):
     def __init__(
         self,
         model: PreTrainedModel,
@@ -18,115 +18,112 @@ class ConceptScrubber:
         rank: int | None = None,
         shrinkage: float = 0.0,
     ):
+        super().__init__()
+
         d_model = model.config.hidden_size
-        layers = get_transformer_layers(model)
+        num_layers = model.config.num_hidden_layers
 
         self.x_dim = d_model
         self.y_dim = y_dim
 
-        self.erasers = {
-            layer: ConceptEraser(
-                d_model,
-                y_dim,
-                device=model.device,
-                cov_type=cov_type,
-                rank=rank,
-                shrinkage=shrinkage,
-            )
-            for layer in layers
-        }
+        self.erasers = nn.ModuleList(
+            [
+                ConceptEraser(
+                    d_model,
+                    y_dim,
+                    device=model.device,
+                    cov_type=cov_type,
+                    rank=rank,
+                    shrinkage=shrinkage,
+                )
+                for _ in range(num_layers)
+            ]
+        )
 
     def clear_x(self):
         """Clear the running statistics of X."""
-        for eraser in self.erasers.values():
+        for eraser in self.erasers:
+            assert isinstance(eraser, ConceptEraser)
             eraser.clear_x()
 
     @contextmanager
-    def record(self, label: Tensor | None = None):
+    def record(self, model: PreTrainedModel, label: Tensor | None = None):
         """Update erasers with the activations of the model, using the given label.
 
         This method adds a forward pre-hook to each layer of the model, which
         records its input activations. These are used to update the erasers.
         """
+        handles = []
+        layers = get_transformer_layers(model)
 
-        # Called before every layer forward pass
-        def record_hook(layer, args):
-            x, *extras = args
+        for _eraser, layer in zip(self.erasers, layers):
+            eraser = assert_type(ConceptEraser, _eraser)
 
-            self.erasers[layer].update(x, label)
-            return (x, *extras)
+            # Called before every layer forward pass
+            def record_hook(_, args):
+                eraser.update(args[0], label)
+                return args
 
-        handles = {
-            layer: layer.register_forward_pre_hook(record_hook)
-            for layer in self.erasers
-        }
+            handles.append(layer.register_forward_pre_hook(record_hook))
 
         try:
             yield self
         finally:
             # Make sure to remove the hooks even if an exception is raised
-            for handle in handles.values():
+            for handle in handles:
                 handle.remove()
 
     @contextmanager
-    def scrub(self, layer_indices: Sequence[int] = ()):
+    def scrub(self, model, layer_indices: Sequence[int] = ()):
         """Add hooks to the model which apply the erasers during a forward pass."""
 
-        # Called before every layer forward pass
-        def apply_hook(layer, args):
-            x, *extras = args
-            x = self.erasers[layer](x)
+        handles = []
+        layers = get_transformer_layers(model)
 
-            return (x, *extras)
+        for _eraser, layer in zip(self.erasers, layers):
+            eraser = assert_type(ConceptEraser, _eraser)
 
-        if layer_indices:
-            layer_list = list(self.erasers.keys())
-            layers = [layer_list[i] for i in layer_indices]
-        else:
-            layers = self.erasers.keys()
+            # Called before every layer forward pass
+            def apply_hook(_, args):
+                x, *extras = args
+                return (eraser(x), *extras)
 
-        handles = {
-            layer: layer.register_forward_pre_hook(apply_hook) for layer in layers
-        }
+            handles.append(layer.register_forward_pre_hook(apply_hook))
 
         try:
             yield self
         finally:
             # Make sure to remove the hooks even if an exception is raised
-            for handle in handles.values():
+            for handle in handles:
                 handle.remove()
 
     @contextmanager
-    def random_scrub(self, layer_indices: Sequence[int] = ()):
-        eraser = next(iter(self.erasers.values()))
+    def random_scrub(self, model, layer_indices: Sequence[int] = ()):
+        handles = []
+        layers = get_transformer_layers(model)
 
+        eraser = assert_type(ConceptEraser, self.erasers[0])
         d = eraser.mean_x.shape[0]
         u = eraser.mean_x.new_zeros(d, eraser.rank)
         u = nn.init.orthogonal_(u)
 
-        # Called after every layer forward pass
-        def apply_hook(layer, args):
-            x, *extras = args
-            mean = self.erasers[layer].mean_x
+        for _eraser, layer in zip(self.erasers, layers):
+            eraser = assert_type(ConceptEraser, _eraser)
 
-            P = self.erasers[layer].proj_for_subspace(u)
-            x = (x - mean) @ P.T + mean
+            # Called before every layer forward pass
+            def apply_hook(_, args):
+                x, *extras = args
+                mean = eraser.mean_x
 
-            return (x, *extras)
+                P = eraser.proj_for_subspace(u)
+                x = (x - mean) @ P.T + mean
+                return (eraser(x), *extras)
 
-        if layer_indices:
-            layer_list = list(self.erasers.keys())
-            layers = [layer_list[i] for i in layer_indices]
-        else:
-            layers = self.erasers.keys()
-
-        handles = {
-            layer: layer.register_forward_pre_hook(apply_hook) for layer in layers
-        }
+            handles.append(layer.register_forward_pre_hook(apply_hook))
 
         try:
             yield self
         finally:
             # Make sure to remove the hooks even if an exception is raised
-            for handle in handles.values():
+            for handle in handles:
                 handle.remove()
