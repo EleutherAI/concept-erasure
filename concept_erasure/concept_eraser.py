@@ -46,7 +46,7 @@ class ConceptEraser(nn.Module):
         device: str | torch.device | None = None,
         dtype: torch.dtype | None = None,
         rank: int | None = None,
-        shrinkage: float = 0.0,
+        shrinkage: float = 1e-3,
     ):
         super().__init__()
 
@@ -117,8 +117,22 @@ class ConceptEraser(nn.Module):
         # Adjust Q to account for the covariance of X
         else:
             sigma = self.cov_x.diag_embed() if self.cov_type == "diag" else self.cov_x
+            if not sigma.isfinite().all():
+                raise RuntimeError("Non-finite values in covariance matrix")
+            if not Q.isfinite().all():
+                raise RuntimeError("Non-finite values in projection matrix")
 
-            return sigma @ torch.linalg.pinv(Q @ sigma @ Q)
+            A = Q @ sigma @ Q
+            try:
+                pinv = torch.linalg.pinv(A, hermitian=True)
+            except torch.linalg.LinAlgError as e:
+                # Better error messages in the common case where A is non-finite
+                if not A.isfinite().all():
+                    raise RuntimeError("Non-finite values in covariance matrix") from e
+                else:
+                    raise e
+
+            return sigma @ pinv
 
     @torch.no_grad()
     def update(self, x: Tensor, y: Tensor | None = None) -> "ConceptEraser":
@@ -130,6 +144,10 @@ class ConceptEraser(nn.Module):
         """
         d, c = self.xcov_M2.shape
         x = x.reshape(-1, d).type_as(self.mean_x)
+
+        if not x.isfinite().all():
+            print("WARNING: Skipping non-finite values in X")
+            return self
 
         n, d2 = x.shape
         assert d == d2, f"Unexpected number of features {d2}"

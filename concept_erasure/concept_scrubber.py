@@ -2,6 +2,7 @@ from contextlib import contextmanager
 from functools import partial
 from typing import Literal, Sequence
 
+import torch
 from torch import Tensor, nn
 from transformers import PreTrainedModel
 
@@ -17,8 +18,9 @@ class ConceptScrubber(nn.Module):
         *,
         affine: bool = True,
         cov_type: Literal["eye", "diag", "full"] = "full",
+        dtype: torch.dtype | None = None,
         rank: int | None = None,
-        shrinkage: float = 0.0,
+        shrinkage: float = 1e-3,
     ):
         super().__init__()
 
@@ -35,6 +37,7 @@ class ConceptScrubber(nn.Module):
                     y_dim,
                     affine=affine,
                     device=model.device,
+                    dtype=dtype,
                     cov_type=cov_type,
                     rank=rank,
                     shrinkage=shrinkage,
@@ -65,7 +68,6 @@ class ConceptScrubber(nn.Module):
         layers = get_transformer_layers(model)
 
         def record_hook(_, args, layer_idx):
-            # print(f"Recording {layer_idx}")
             eraser = assert_type(ConceptEraser, self.erasers[layer_idx])
             eraser.update(args[0], label)
             return args
@@ -100,10 +102,9 @@ class ConceptScrubber(nn.Module):
         layers = get_transformer_layers(model)
 
         def apply_hook(_, args, layer_idx):
-            # print(f"Scrubbing {layer_idx}")
             x, *extras = args
             eraser = assert_type(ConceptEraser, self.erasers[layer_idx])
-            x_ = eraser(x) if not dry_run else x
+            x_ = eraser(x).type_as(x) if not dry_run else x
             if return_hiddens:
                 hiddens.append(x_)
 
@@ -134,6 +135,7 @@ class ConceptScrubber(nn.Module):
         u = eraser.mean_x.new_zeros(d, eraser.rank)
         u = nn.init.orthogonal_(u)
 
+        @torch.autocast("cuda", enabled=torch.cuda.is_available())
         def apply_hook(_, args, layer_idx):
             x, *extras = args
             eraser = assert_type(ConceptEraser, self.erasers[layer_idx])
@@ -141,11 +143,11 @@ class ConceptScrubber(nn.Module):
 
             P = eraser.proj_for_subspace(u)
             if eraser.affine:
-                x = (x - mean) @ P.T + mean
+                _x = (x - mean) @ P.T + mean
             else:
-                x = x @ P.T
+                _x = x @ P.T
 
-            return (x, *extras)
+            return (_x.type_as(x), *extras)
 
         for i, layer in enumerate(layers):
             # Skip layers which are not in the given indices
