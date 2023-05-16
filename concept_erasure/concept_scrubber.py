@@ -15,7 +15,7 @@ class ConceptScrubber(nn.Module):
         model: PreTrainedModel,
         y_dim: int = 1,
         *,
-        affine: bool = False,
+        affine: bool = True,
         cov_type: Literal["eye", "diag", "full"] = "full",
         rank: int | None = None,
         shrinkage: float = 0.0,
@@ -50,7 +50,12 @@ class ConceptScrubber(nn.Module):
             eraser.clear_x()
 
     @contextmanager
-    def record(self, model: PreTrainedModel, label: Tensor | None = None):
+    def record(
+        self,
+        model: PreTrainedModel,
+        label: Tensor | None = None,
+        layer_indices: Sequence[int] = (),
+    ):
         """Update erasers with the activations of the model, using the given label.
 
         This method adds a forward pre-hook to each layer of the model, which
@@ -60,11 +65,16 @@ class ConceptScrubber(nn.Module):
         layers = get_transformer_layers(model)
 
         def record_hook(_, args, layer_idx):
+            # print(f"Recording {layer_idx}")
             eraser = assert_type(ConceptEraser, self.erasers[layer_idx])
             eraser.update(args[0], label)
             return args
 
         for i, layer in enumerate(layers):
+            # Skip layers which are not in the given indices
+            if layer_indices and i not in layer_indices:
+                continue
+
             hook_fn = partial(record_hook, layer_idx=i)
             handles.append(layer.register_forward_pre_hook(hook_fn))
 
@@ -76,23 +86,39 @@ class ConceptScrubber(nn.Module):
                 handle.remove()
 
     @contextmanager
-    def scrub(self, model, layer_indices: Sequence[int] = ()):
+    def scrub(
+        self,
+        model,
+        dry_run: bool = False,
+        layer_indices: Sequence[int] = (),
+        return_hiddens: bool = False,
+    ):
         """Add hooks to the model which apply the erasers during a forward pass."""
 
         handles = []
+        hiddens = []
         layers = get_transformer_layers(model)
 
         def apply_hook(_, args, layer_idx):
+            # print(f"Scrubbing {layer_idx}")
             x, *extras = args
             eraser = assert_type(ConceptEraser, self.erasers[layer_idx])
-            return (eraser(x), *extras)
+            x_ = eraser(x) if not dry_run else x
+            if return_hiddens:
+                hiddens.append(x_)
+
+            return (x_, *extras)
 
         for i, layer in enumerate(layers):
+            # Skip layers which are not in the given indices
+            if layer_indices and i not in layer_indices:
+                continue
+
             hook_fn = partial(apply_hook, layer_idx=i)
             handles.append(layer.register_forward_pre_hook(hook_fn))
 
         try:
-            yield self
+            yield hiddens
         finally:
             # Make sure to remove the hooks even if an exception is raised
             for handle in handles:
@@ -122,6 +148,10 @@ class ConceptScrubber(nn.Module):
             return (x, *extras)
 
         for i, layer in enumerate(layers):
+            # Skip layers which are not in the given indices
+            if layer_indices and i not in layer_indices:
+                continue
+
             hook_fn = partial(apply_hook, layer_idx=i)
             handles.append(layer.register_forward_pre_hook(hook_fn))
 

@@ -43,7 +43,6 @@ class ConceptEraser(nn.Module):
         cov_type: Literal["eye", "diag", "full"] = "full",
         *,
         affine: bool = True,
-        clip_variances: bool = True,
         device: str | torch.device | None = None,
         dtype: torch.dtype | None = None,
         rank: int | None = None,
@@ -55,7 +54,6 @@ class ConceptEraser(nn.Module):
         self.x_dim = x_dim
 
         self.affine = affine
-        self.clip_variances = clip_variances
         self.cov_type = cov_type
         self.rank = rank or y_dim
         self.shrinkage = shrinkage
@@ -204,29 +202,6 @@ class ConceptEraser(nn.Module):
         ), "Can't compute covariance matrix for cov_type='eye'"
 
         cov = self.x_M2 / (self.n_x - 1)
-
-        # Apply "All But the Top" style pre-processing. We want to limit the influence
-        # of the highest variance directions on the projection matrix, since this often
-        # leads to poor performance in practice.
-        if self.clip_variances:
-            d = cov.shape[-1]
-            thresh = d // 100  # Heuristic from the paper
-
-            # Same as below but without the PCA
-            if self.cov_type == "diag":
-                sorted_vars, indices = cov.sort(descending=True)
-                cov[indices[thresh:]] = sorted_vars[thresh]
-
-            # We have to do PCA and then clip
-            elif self.cov_type == "full":
-                L, Q = torch.linalg.eigh(cov)
-
-                # We don't want to literally zero out the highest eigenvalues
-                # but we do want to clip how big they can be
-                max_val = L[-thresh]
-                L[-thresh:] = max_val
-
-                cov = Q @ torch.diag_embed(L) @ Q.mT
 
         # Apply shrinkage toward the identity
         if self.shrinkage > 0.0:

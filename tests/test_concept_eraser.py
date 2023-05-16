@@ -51,7 +51,7 @@ def test_stats():
 # Both `1` and `2` are binary classification problems, but `1` means the labels are
 # encoded in a 1D one-hot vector, while `2` means the labels are encoded in an
 # n x 2 one-hot matrix.
-@pytest.mark.parametrize("num_classes", [1, 2, 3, 5, 10])
+@pytest.mark.parametrize("num_classes", [1, 2, 3, 5, 10, 20])
 def test_projection(num_classes: int):
     n, d = 2048, 128
     num_distinct = max(num_classes, 2)
