@@ -14,8 +14,8 @@ def test_stats():
     batch_size = 10
     num_batches = 5
 
-    # Initialize the ConceptEraser
-    eraser = ConceptEraser(num_features, num_classes)
+    # Turn off eigenvalue clipping for testing
+    eraser = ConceptEraser(num_features, num_classes, clip_variances=False)
 
     # Generate random data
     torch.manual_seed(42)
@@ -74,7 +74,7 @@ def test_projection(num_classes: int):
     mse_dict: dict[str, float] = {}
 
     for cov_type in ("eye", "diag", "full"):
-        eraser = ConceptEraser.fit(X_t, Y_1h, cov_type=cov_type)
+        eraser = ConceptEraser.fit(X_t, Y_1h, clip_variances=False, cov_type=cov_type)
         X_ = eraser(X_t)
 
         # Check idempotence

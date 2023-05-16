@@ -29,20 +29,12 @@ class ConceptEraser(nn.Module):
     """Cached projection matrix, computed lazily."""
 
     @classmethod
-    def fit(
-        cls,
-        x: Tensor,
-        y: Tensor,
-        cov_type: Literal["eye", "diag", "full"] = "full",
-        rank: int | None = None,
-    ) -> "ConceptEraser":
+    def fit(cls, x: Tensor, y: Tensor, **kwargs) -> "ConceptEraser":
         """Convenience method to fit a ConceptEraser on data and return it."""
         n, d = x.shape
         _, k = y.reshape(n, -1).shape
 
-        return cls(
-            d, k, cov_type=cov_type, device=x.device, dtype=x.dtype, rank=rank
-        ).update(x, y)
+        return cls(d, k, device=x.device, dtype=x.dtype, **kwargs).update(x, y)
 
     def __init__(
         self,
@@ -50,6 +42,8 @@ class ConceptEraser(nn.Module):
         y_dim: int,
         cov_type: Literal["eye", "diag", "full"] = "full",
         *,
+        affine: bool = True,
+        clip_variances: bool = True,
         device: str | torch.device | None = None,
         dtype: torch.dtype | None = None,
         rank: int | None = None,
@@ -59,6 +53,9 @@ class ConceptEraser(nn.Module):
 
         self.y_dim = y_dim
         self.x_dim = x_dim
+
+        self.affine = affine
+        self.clip_variances = clip_variances
         self.cov_type = cov_type
         self.rank = rank or y_dim
         self.shrinkage = shrinkage
@@ -104,7 +101,10 @@ class ConceptEraser(nn.Module):
         assert self.n_x > 0, "Call update() before forward()"
         assert x.shape[-1] == d
 
-        return (x - self.mean_x) @ self.P.T + self.mean_x
+        if self.affine:
+            return (x - self.mean_x) @ self.P.T + self.mean_x
+        else:
+            return x @ self.P.T
 
     def proj_for_subspace(self, u: Tensor) -> Tensor:
         """Compute MSE-optimal projection matrix given orthonormal basis `u`."""
@@ -120,12 +120,7 @@ class ConceptEraser(nn.Module):
         else:
             sigma = self.cov_x.diag_embed() if self.cov_type == "diag" else self.cov_x
 
-            # Manual Moore-Penrose pseudoinverse
-            vals, vecs = torch.linalg.eigh(Q @ sigma @ Q)
-            vals_inv = vals.reciprocal().where(vals > 1e-3, 0.0)
-            pinv = vecs @ vals_inv.diag_embed() @ vecs.mT
-
-            return sigma @ pinv
+            return sigma @ torch.linalg.pinv(Q @ sigma @ Q)
 
     @torch.no_grad()
     def update(self, x: Tensor, y: Tensor | None = None) -> "ConceptEraser":
@@ -198,13 +193,42 @@ class ConceptEraser(nn.Module):
 
     @property
     def cov_x(self) -> Tensor:
-        """The covariance matrix of X, or its diagonal if `cov_type == 'diag'`."""
+        """The covariance matrix of X, or its diagonal if `cov_type == 'diag'`.
+
+        Shrinkage and eigenvalue clipping may be applied to the covariance matrix
+        in order to make it more well-behaved and robust to noise.
+        """
         assert self.n_x > 1, "Call update() before accessing cov_x"
         assert (
             self.x_M2 is not None
         ), "Can't compute covariance matrix for cov_type='eye'"
 
         cov = self.x_M2 / (self.n_x - 1)
+
+        # Apply "All But the Top" style pre-processing. We want to limit the influence
+        # of the highest variance directions on the projection matrix, since this often
+        # leads to poor performance in practice.
+        if self.clip_variances:
+            d = cov.shape[-1]
+            thresh = d // 100  # Heuristic from the paper
+
+            # Same as below but without the PCA
+            if self.cov_type == "diag":
+                sorted_vars, indices = cov.sort(descending=True)
+                cov[indices[thresh:]] = sorted_vars[thresh]
+
+            # We have to do PCA and then clip
+            elif self.cov_type == "full":
+                L, Q = torch.linalg.eigh(cov)
+
+                # We don't want to literally zero out the highest eigenvalues
+                # but we do want to clip how big they can be
+                max_val = L[-thresh]
+                L[:-thresh] = max_val
+
+                cov = Q @ torch.diag_embed(L) @ Q.mT
+
+        # Apply shrinkage toward the identity
         if self.shrinkage > 0.0:
             cov *= 1 - self.shrinkage
 

@@ -14,6 +14,7 @@ class ConceptScrubber(nn.Module):
         model: PreTrainedModel,
         y_dim: int = 1,
         *,
+        affine: bool = False,
         cov_type: Literal["eye", "diag", "full"] = "full",
         rank: int | None = None,
         shrinkage: float = 0.0,
@@ -31,6 +32,7 @@ class ConceptScrubber(nn.Module):
                 ConceptEraser(
                     d_model,
                     y_dim,
+                    affine=affine,
                     device=model.device,
                     cov_type=cov_type,
                     rank=rank,
@@ -116,8 +118,12 @@ class ConceptScrubber(nn.Module):
                 mean = eraser.mean_x
 
                 P = eraser.proj_for_subspace(u)
-                x = (x - mean) @ P.T + mean
-                return (eraser(x), *extras)
+                if eraser.affine:
+                    x = (x - mean) @ P.T + mean
+                else:
+                    x = x @ P.T
+
+                return (x, *extras)
 
             handles.append(layer.register_forward_pre_hook(apply_hook))
 
