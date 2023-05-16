@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+from functools import partial
 from typing import Literal, Sequence
 
 from torch import Tensor, nn
@@ -58,15 +59,14 @@ class ConceptScrubber(nn.Module):
         handles = []
         layers = get_transformer_layers(model)
 
-        for _eraser, layer in zip(self.erasers, layers):
-            eraser = assert_type(ConceptEraser, _eraser)
+        def record_hook(_, args, layer_idx):
+            eraser = assert_type(ConceptEraser, self.erasers[layer_idx])
+            eraser.update(args[0], label)
+            return args
 
-            # Called before every layer forward pass
-            def record_hook(_, args):
-                eraser.update(args[0], label)
-                return args
-
-            handles.append(layer.register_forward_pre_hook(record_hook))
+        for i, layer in enumerate(layers):
+            hook_fn = partial(record_hook, layer_idx=i)
+            handles.append(layer.register_forward_pre_hook(hook_fn))
 
         try:
             yield self
@@ -82,15 +82,14 @@ class ConceptScrubber(nn.Module):
         handles = []
         layers = get_transformer_layers(model)
 
-        for _eraser, layer in zip(self.erasers, layers):
-            eraser = assert_type(ConceptEraser, _eraser)
+        def apply_hook(_, args, layer_idx):
+            x, *extras = args
+            eraser = assert_type(ConceptEraser, self.erasers[layer_idx])
+            return (eraser(x), *extras)
 
-            # Called before every layer forward pass
-            def apply_hook(_, args):
-                x, *extras = args
-                return (eraser(x), *extras)
-
-            handles.append(layer.register_forward_pre_hook(apply_hook))
+        for i, layer in enumerate(layers):
+            hook_fn = partial(apply_hook, layer_idx=i)
+            handles.append(layer.register_forward_pre_hook(hook_fn))
 
         try:
             yield self
@@ -109,23 +108,22 @@ class ConceptScrubber(nn.Module):
         u = eraser.mean_x.new_zeros(d, eraser.rank)
         u = nn.init.orthogonal_(u)
 
-        for _eraser, layer in zip(self.erasers, layers):
-            eraser = assert_type(ConceptEraser, _eraser)
+        def apply_hook(_, args, layer_idx):
+            x, *extras = args
+            eraser = assert_type(ConceptEraser, self.erasers[layer_idx])
+            mean = eraser.mean_x
 
-            # Called before every layer forward pass
-            def apply_hook(_, args):
-                x, *extras = args
-                mean = eraser.mean_x
+            P = eraser.proj_for_subspace(u)
+            if eraser.affine:
+                x = (x - mean) @ P.T + mean
+            else:
+                x = x @ P.T
 
-                P = eraser.proj_for_subspace(u)
-                if eraser.affine:
-                    x = (x - mean) @ P.T + mean
-                else:
-                    x = x @ P.T
+            return (x, *extras)
 
-                return (x, *extras)
-
-            handles.append(layer.register_forward_pre_hook(apply_hook))
+        for i, layer in enumerate(layers):
+            hook_fn = partial(apply_hook, layer_idx=i)
+            handles.append(layer.register_forward_pre_hook(hook_fn))
 
         try:
             yield self

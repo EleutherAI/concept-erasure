@@ -224,7 +224,7 @@ class ConceptEraser(nn.Module):
                 # We don't want to literally zero out the highest eigenvalues
                 # but we do want to clip how big they can be
                 max_val = L[-thresh]
-                L[:-thresh] = max_val
+                L[-thresh:] = max_val
 
                 cov = Q @ torch.diag_embed(L) @ Q.mT
 
