@@ -15,7 +15,7 @@ def test_stats():
     num_batches = 5
 
     # Turn off eigenvalue clipping for testing
-    eraser = ConceptEraser(num_features, num_classes, clip_variances=False)
+    eraser = ConceptEraser(num_features, num_classes)
 
     # Generate random data
     torch.manual_seed(42)
@@ -74,7 +74,7 @@ def test_projection(num_classes: int):
     mse_dict: dict[str, float] = {}
 
     for cov_type in ("eye", "diag", "full"):
-        eraser = ConceptEraser.fit(X_t, Y_1h, clip_variances=False, cov_type=cov_type)
+        eraser = ConceptEraser.fit(X_t, Y_1h, cov_type=cov_type)
         X_ = eraser(X_t)
 
         # Check idempotence
@@ -84,7 +84,7 @@ def test_projection(num_classes: int):
         # of 1 for numerical error. It's hard to find a threshold for the singular
         # values at works for all matrices.
         rank = torch.linalg.svdvals(X_t - X_).gt(eps).sum()
-        assert abs(rank - num_classes) < 2
+        assert rank <= num_classes
 
         # Record the mean squared error for comparison
         X_np = X_.numpy()

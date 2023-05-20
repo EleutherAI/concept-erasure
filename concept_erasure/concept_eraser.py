@@ -1,3 +1,4 @@
+from math import ceil
 from typing import Literal
 
 import torch
@@ -43,20 +44,41 @@ class ConceptEraser(nn.Module):
         cov_type: Literal["eye", "diag", "full"] = "full",
         *,
         affine: bool = True,
+        clip_variances: bool = False,
         device: str | torch.device | None = None,
         dtype: torch.dtype | None = None,
-        rank: int | None = None,
-        shrinkage: float = 1e-3,
+        max_rank: int | None = None,
+        svd_tol: float = 1e-3,
     ):
+        """Initialize a ConceptEraser.
+
+        Args:
+            x_dim: Dimensionality of the input.
+            y_dim: Dimensionality of the labels.
+            cov_type: Type of covariance matrix to use. One of "eye", "diag", or "full".
+            affine: Whether to use a bias term to ensure the unconditional mean of the
+                features remains the same after erasure.
+            device: Device to put the statistics on.
+            dtype: Data type to use for the statistics.
+            max_rank: Maximum dimensionality of the subspace to delete.
+            svd_tol: Singular values under this threshold are truncated, both during
+                the phase where we do SVD on the cross-covariance matrix, and at the
+                phase where we compute the pseudoinverse of the projected covariance
+                matrix. Higher values are more numerically stable and result in less
+                damage to the representation, but may leave trace correlations intact.
+        """
         super().__init__()
 
         self.y_dim = y_dim
         self.x_dim = x_dim
 
         self.affine = affine
+        self.clip_variances = clip_variances
         self.cov_type = cov_type
-        self.rank = rank or y_dim
-        self.shrinkage = shrinkage
+        self.max_rank = max_rank or y_dim
+
+        assert svd_tol > 0.0, "`svd_tol` must be positive for numerical stability."
+        self.svd_tol = svd_tol
 
         self.register_buffer("mean_x", torch.zeros(x_dim, device=device, dtype=dtype))
         self.register_buffer("mean_y", self.mean_x.new_zeros(y_dim))
@@ -102,7 +124,7 @@ class ConceptEraser(nn.Module):
         if self.affine:
             return (x - self.mean_x) @ self.P.T + self.mean_x
         else:
-            return x @ self.P.T
+            return (x.float() @ self.P.T).type_as(x)
 
     def proj_for_subspace(self, u: Tensor) -> Tensor:
         """Compute MSE-optimal projection matrix given orthonormal basis `u`."""
@@ -123,8 +145,9 @@ class ConceptEraser(nn.Module):
                 raise RuntimeError("Non-finite values in projection matrix")
 
             A = Q @ sigma @ Q
+
             try:
-                pinv = torch.linalg.pinv(A, hermitian=True)
+                L, V = torch.linalg.eigh(A)
             except torch.linalg.LinAlgError as e:
                 # Better error messages in the common case where A is non-finite
                 if not A.isfinite().all():
@@ -132,7 +155,11 @@ class ConceptEraser(nn.Module):
                 else:
                     raise e
 
-            return sigma @ pinv
+            # Manual pseudoinverse
+            L = L.reciprocal().where(L > self.svd_tol, 0.0)
+            P = sigma @ V @ torch.diag_embed(L) @ V.mT
+
+            return P
 
     @torch.no_grad()
     def update(self, x: Tensor, y: Tensor | None = None) -> "ConceptEraser":
@@ -146,8 +173,7 @@ class ConceptEraser(nn.Module):
         x = x.reshape(-1, d).type_as(self.mean_x)
 
         if not x.isfinite().all():
-            print("WARNING: Skipping non-finite values in X")
-            return self
+            raise RuntimeError("Non-finite values in input")
 
         n, d2 = x.shape
         assert d == d2, f"Unexpected number of features {d2}"
@@ -194,26 +220,30 @@ class ConceptEraser(nn.Module):
     @property
     def P(self) -> Tensor:
         """Projection matrix for removing the subspace."""
-        # Compute the projection matrix if we haven't already
-        if self._P is None:
-            if self.y_dim == self.rank:
-                # Get an orthonormal basis for the column space of the xcov matrix
-                u, _ = torch.linalg.qr(self.xcov)
-            else:
-                # We only want to erase the highest energy part of the subspace
-                u, _, _ = torch.svd_lowrank(self.xcov, q=self.rank)
+        if self._P is not None:
+            return self._P
 
-            self._P = self.proj_for_subspace(u)
+        u, s, _ = torch.linalg.svd(self.xcov, full_matrices=False)
+        if self.max_rank < self.y_dim:
+            # We only want to erase the highest energy part of the subspace
+            u, s = u[:, : self.max_rank], s[: self.max_rank]
 
+        # Throw away singular values that are too small. It may turn out that
+        # we don't need to do anything at all, in which case we can just use
+        # the identity matrix.
+        mask = s > self.svd_tol
+        if not mask.any():
+            self._P = torch.eye(self.x_dim, device=u.device, dtype=u.dtype)
+            return self._P
+
+        u, s = u[:, mask], s[mask]
+
+        self._P = self.proj_for_subspace(u)
         return self._P
 
     @property
     def cov_x(self) -> Tensor:
-        """The covariance matrix of X, or its diagonal if `cov_type == 'diag'`.
-
-        Shrinkage and eigenvalue clipping may be applied to the covariance matrix
-        in order to make it more well-behaved and robust to noise.
-        """
+        """The covariance matrix of X, or its diagonal if `cov_type == 'diag'`."""
         assert self.n_x > 1, "Call update() before accessing cov_x"
         assert (
             self.x_M2 is not None
@@ -221,14 +251,16 @@ class ConceptEraser(nn.Module):
 
         cov = self.x_M2 / (self.n_x - 1)
 
-        # Apply shrinkage toward the identity
-        if self.shrinkage > 0.0:
-            cov *= 1 - self.shrinkage
+        # Accumulated numerical error may cause this to be slightly non-symmetric
+        cov = (cov + cov.mT) / 2
 
-            if self.cov_type == "diag":
-                cov.add_(self.shrinkage)
-            elif self.cov_type == "full":
-                torch.linalg.diagonal(cov).add_(self.shrinkage)
+        if self.clip_variances:
+            assert self.cov_type == "full"
+            thresh = ceil(cov.shape[0] / 100)
+
+            L, Q = torch.linalg.eigh(cov)
+            L = L.clamp_max(L[-thresh])
+            cov = Q @ torch.diag_embed(L) @ Q.mT
 
         return cov
 

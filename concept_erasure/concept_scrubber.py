@@ -19,8 +19,7 @@ class ConceptScrubber(nn.Module):
         affine: bool = True,
         cov_type: Literal["eye", "diag", "full"] = "full",
         dtype: torch.dtype | None = None,
-        rank: int | None = None,
-        shrinkage: float = 1e-3,
+        max_rank: int | None = None,
     ):
         super().__init__()
 
@@ -36,11 +35,11 @@ class ConceptScrubber(nn.Module):
                     d_model,
                     y_dim,
                     affine=affine,
+                    clip_variances=True,
                     device=model.device,
                     dtype=dtype,
                     cov_type=cov_type,
-                    rank=rank,
-                    shrinkage=shrinkage,
+                    max_rank=max_rank,
                 )
                 for _ in range(num_layers)
             ]
@@ -132,10 +131,9 @@ class ConceptScrubber(nn.Module):
 
         eraser = assert_type(ConceptEraser, self.erasers[0])
         d = eraser.mean_x.shape[0]
-        u = eraser.mean_x.new_zeros(d, eraser.rank)
+        u = eraser.mean_x.new_zeros(d, eraser.max_rank)
         u = nn.init.orthogonal_(u)
 
-        @torch.autocast("cuda", enabled=torch.cuda.is_available())
         def apply_hook(_, args, layer_idx):
             x, *extras = args
             eraser = assert_type(ConceptEraser, self.erasers[layer_idx])
@@ -143,9 +141,9 @@ class ConceptScrubber(nn.Module):
 
             P = eraser.proj_for_subspace(u)
             if eraser.affine:
-                _x = (x - mean) @ P.T + mean
+                _x = (x.type_as(mean) - mean) @ P.T + mean
             else:
-                _x = x @ P.T
+                _x = x.type_as(mean) @ P.T
 
             return (_x.type_as(x), *extras)
 
