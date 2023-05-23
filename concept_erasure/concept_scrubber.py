@@ -7,7 +7,7 @@ from torch import Tensor, nn
 from transformers import PreTrainedModel
 
 from .concept_eraser import ConceptEraser
-from .utils import assert_type, get_transformer_layers
+from .utils import assert_type, is_norm_layer
 
 
 class ConceptScrubber(nn.Module):
@@ -24,7 +24,7 @@ class ConceptScrubber(nn.Module):
         super().__init__()
 
         d_model = model.config.hidden_size
-        num_layers = model.config.num_hidden_layers
+        num_layers = sum(is_norm_layer(mod) for mod in model.modules())
 
         self.x_dim = d_model
         self.y_dim = y_dim
@@ -35,7 +35,6 @@ class ConceptScrubber(nn.Module):
                     d_model,
                     y_dim,
                     affine=affine,
-                    clip_variances=True,
                     device=model.device,
                     dtype=dtype,
                     cov_type=cov_type,
@@ -45,18 +44,12 @@ class ConceptScrubber(nn.Module):
             ]
         )
 
-    def clear_x(self):
-        """Clear the running statistics of X."""
-        for eraser in self.erasers:
-            assert isinstance(eraser, ConceptEraser)
-            eraser.clear_x()
-
     @contextmanager
     def record(
         self,
         model: PreTrainedModel,
         label: Tensor | None = None,
-        layer_indices: Sequence[int] = (),
+        eraser_indices: Sequence[int] = (),
     ):
         """Update erasers with the activations of the model, using the given label.
 
@@ -64,20 +57,20 @@ class ConceptScrubber(nn.Module):
         records its input activations. These are used to update the erasers.
         """
         handles = []
-        layers = get_transformer_layers(model)
+        norm_layers = [mod for mod in model.modules() if is_norm_layer(mod)]
 
-        def record_hook(_, args, layer_idx):
+        def record_hook(_, __, output, layer_idx):
+            x, *_ = output
             eraser = assert_type(ConceptEraser, self.erasers[layer_idx])
-            eraser.update(args[0], label)
-            return args
+            eraser.update(x, label)
 
-        for i, layer in enumerate(layers):
+        for i, norm_layer in enumerate(norm_layers):
             # Skip layers which are not in the given indices
-            if layer_indices and i not in layer_indices:
+            if eraser_indices and i not in eraser_indices:
                 continue
 
             hook_fn = partial(record_hook, layer_idx=i)
-            handles.append(layer.register_forward_pre_hook(hook_fn))
+            handles.append(norm_layer.register_forward_hook(hook_fn))
 
         try:
             yield self
@@ -91,31 +84,30 @@ class ConceptScrubber(nn.Module):
         self,
         model,
         dry_run: bool = False,
-        layer_indices: Sequence[int] = (),
+        eraser_indices: Sequence[int] = (),
         return_hiddens: bool = False,
     ):
         """Add hooks to the model which apply the erasers during a forward pass."""
 
         handles = []
         hiddens = []
-        layers = get_transformer_layers(model)
+        norm_layers = [mod for mod in model.modules() if is_norm_layer(mod)]
 
-        def apply_hook(_, args, layer_idx):
-            x, *extras = args
+        def apply_hook(_, __, x, layer_idx):
             eraser = assert_type(ConceptEraser, self.erasers[layer_idx])
             x_ = eraser(x).type_as(x) if not dry_run else x
             if return_hiddens:
                 hiddens.append(x_)
 
-            return (x_, *extras)
+            return x_
 
-        for i, layer in enumerate(layers):
+        for i, norm_layer in enumerate(norm_layers):
             # Skip layers which are not in the given indices
-            if layer_indices and i not in layer_indices:
+            if eraser_indices and i not in eraser_indices:
                 continue
 
             hook_fn = partial(apply_hook, layer_idx=i)
-            handles.append(layer.register_forward_pre_hook(hook_fn))
+            handles.append(norm_layer.register_forward_hook(hook_fn))
 
         try:
             yield hiddens
@@ -125,17 +117,16 @@ class ConceptScrubber(nn.Module):
                 handle.remove()
 
     @contextmanager
-    def random_scrub(self, model, layer_indices: Sequence[int] = ()):
+    def random_scrub(self, model, eraser_indices: Sequence[int] = ()):
         handles = []
-        layers = get_transformer_layers(model)
+        norm_layers = [mod for mod in model.modules() if is_norm_layer(mod)]
 
         eraser = assert_type(ConceptEraser, self.erasers[0])
         d = eraser.mean_x.shape[0]
         u = eraser.mean_x.new_zeros(d, eraser.max_rank)
         u = nn.init.orthogonal_(u)
 
-        def apply_hook(_, args, layer_idx):
-            x, *extras = args
+        def apply_hook(_, __, x, layer_idx):
             eraser = assert_type(ConceptEraser, self.erasers[layer_idx])
             mean = eraser.mean_x
 
@@ -145,15 +136,15 @@ class ConceptScrubber(nn.Module):
             else:
                 _x = x.type_as(mean) @ P.T
 
-            return (_x.type_as(x), *extras)
+            return _x.type_as(x)
 
-        for i, layer in enumerate(layers):
+        for i, norm_layer in enumerate(norm_layers):
             # Skip layers which are not in the given indices
-            if layer_indices and i not in layer_indices:
+            if eraser_indices and i not in eraser_indices:
                 continue
 
             hook_fn = partial(apply_hook, layer_idx=i)
-            handles.append(layer.register_forward_pre_hook(hook_fn))
+            handles.append(norm_layer.register_forward_hook(hook_fn))
 
         try:
             yield self

@@ -24,3 +24,9 @@ def get_transformer_layers(model: PreTrainedModel) -> nn.ModuleList:
 
     # Return the module list with the most parameters
     return max(lists, key=lambda mod: sum(p.numel() for p in mod.parameters()))
+
+
+def is_norm_layer(module: nn.Module) -> bool:
+    """Return `True` if the module is a normalization layer."""
+    cls_name = type(module).__name__
+    return cls_name.endswith("LayerNorm") or cls_name.endswith("RMSNorm")

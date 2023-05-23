@@ -1,4 +1,3 @@
-from math import ceil
 from typing import Literal
 
 import torch
@@ -44,7 +43,7 @@ class ConceptEraser(nn.Module):
         cov_type: Literal["eye", "diag", "full"] = "full",
         *,
         affine: bool = True,
-        clip_variances: bool = False,
+        constrain_tpc: bool = True,
         device: str | torch.device | None = None,
         dtype: torch.dtype | None = None,
         max_rank: int | None = None,
@@ -58,6 +57,10 @@ class ConceptEraser(nn.Module):
             cov_type: Type of covariance matrix to use. One of "eye", "diag", or "full".
             affine: Whether to use a bias term to ensure the unconditional mean of the
                 features remains the same after erasure.
+            constrain_tpc: Whether to prevent the top principal component of the data
+                from increasing in variance after erasure. To accomplish this, we use a
+                convex combination of the least squares projection matrix P and an
+                orthogonal projection matrix onto ker(P), instead of P itself.
             device: Device to put the statistics on.
             dtype: Data type to use for the statistics.
             max_rank: Maximum dimensionality of the subspace to delete.
@@ -73,9 +76,9 @@ class ConceptEraser(nn.Module):
         self.x_dim = x_dim
 
         self.affine = affine
-        self.clip_variances = clip_variances
         self.cov_type = cov_type
         self.max_rank = max_rank or y_dim
+        self.constrain_tpc = constrain_tpc
 
         assert svd_tol > 0.0, "`svd_tol` must be positive for numerical stability."
         self.svd_tol = svd_tol
@@ -158,6 +161,24 @@ class ConceptEraser(nn.Module):
             # Manual pseudoinverse
             L = L.reciprocal().where(L > self.svd_tol, 0.0)
             P = sigma @ V @ torch.diag_embed(L) @ V.mT
+
+            # Prevent the variance of the top principal component from increasing
+            if self.constrain_tpc:
+                # Get the top principal component and its variance with LOBPCG. This is
+                # faster for large hidden sizes and when we have an initial guess
+                old_variance, tpc = torch.lobpcg(sigma)
+
+                # Use the current TPC to warm-start LOBPCG for the projected covariance
+                new_variance, tpc = torch.lobpcg(P @ sigma @ P.mT, X=tpc)
+
+                # If applying the projection matrix increases the variance, this might
+                # cause instability, especially when erasure is applied multiple times.
+                # We regularize toward the orthogonal projection matrix to avoid this.
+                while new_variance > old_variance:
+                    # TODO: Maybe do a proper bisection search to find the mixture of
+                    # P and Q that makes new_variance == old_variance?
+                    P = (P + Q) / 2
+                    new_variance, tpc = torch.lobpcg(P @ sigma @ P.mT, X=tpc)
 
             return P
 
@@ -252,17 +273,7 @@ class ConceptEraser(nn.Module):
         cov = self.x_M2 / (self.n_x - 1)
 
         # Accumulated numerical error may cause this to be slightly non-symmetric
-        cov = (cov + cov.mT) / 2
-
-        if self.clip_variances:
-            assert self.cov_type == "full"
-            thresh = ceil(cov.shape[0] / 100)
-
-            L, Q = torch.linalg.eigh(cov)
-            L = L.clamp_max(L[-thresh])
-            cov = Q @ torch.diag_embed(L) @ Q.mT
-
-        return cov
+        return (cov + cov.mT) / 2
 
     @property
     def xcov(self) -> Tensor:
