@@ -1,3 +1,4 @@
+import math
 from typing import Any, Type, TypeVar, cast
 
 from torch import nn
@@ -12,6 +13,16 @@ def assert_type(typ: Type[T], obj: Any) -> T:
         raise TypeError(f"Expected {typ.__name__}, got {type(obj).__name__}")
 
     return cast(typ, obj)
+
+
+def chunk(seq: list[T], chunk_size: int) -> list[list[T]]:
+    """Chunk a sequence into chunks of size `chunk_size`."""
+
+    # Why the hell is this not in the standard library?
+    return [
+        seq[i * chunk_size : (i + 1) * chunk_size]
+        for i in range(math.ceil(len(seq) / chunk_size))
+    ]
 
 
 def get_transformer_layers(model: PreTrainedModel) -> nn.ModuleList:
@@ -30,3 +41,10 @@ def is_norm_layer(module: nn.Module) -> bool:
     """Return `True` if the module is a normalization layer."""
     cls_name = type(module).__name__
     return cls_name.endswith("LayerNorm") or cls_name.endswith("RMSNorm")
+
+
+def mangle_module_path(name: str) -> str:
+    """Mangle a module path to make it a valid key in a `nn.ModuleDict`."""
+    # This is a weird edge case we probably don't need to support
+    assert "-" not in name, "Module path cannot contain `-`"
+    return name.replace(".", "-")

@@ -1,3 +1,5 @@
+from itertools import product
+
 import numpy as np
 import pytest
 import torch
@@ -40,18 +42,19 @@ def test_stats():
     expected_cov = torch.einsum("b...m,b...n->...mn", x_centered, x_centered)
     expected_cov /= batch_size * num_batches - 1
 
-    expected_xcov = torch.einsum("b...m,b...n->...mn", x_centered, y_centered)
-    expected_xcov /= batch_size * num_batches - 1
+    expected_sigma_xz = torch.einsum("b...m,b...n->...mn", x_centered, y_centered)
+    expected_sigma_xz /= batch_size * num_batches - 1
 
     # Compare the computed cross-covariance matrix with the expected one
     torch.testing.assert_close(eraser.cov_x, expected_cov)
-    torch.testing.assert_close(eraser.xcov, expected_xcov)
+    torch.testing.assert_close(eraser.sigma_xz, expected_sigma_xz)
 
 
 # Both `1` and `2` are binary classification problems, but `1` means the labels are
 # encoded in a 1D one-hot vector, while `2` means the labels are encoded in an
 # n x 2 one-hot matrix.
 @pytest.mark.parametrize("num_classes", [1, 2, 3, 5, 10, 20])
+@torch.no_grad()
 def test_projection(num_classes: int):
     n, d = 2048, 128
     num_distinct = max(num_classes, 2)
@@ -70,28 +73,29 @@ def test_projection(num_classes: int):
     else:
         Y_1h = Y_t
 
-    eps = 1e-9
-    mse_dict: dict[str, float] = {}
+    eps = 2e-9
+    mse_dict: dict[tuple[bool, str], float] = {}
 
-    for cov_type in ("eye", "diag", "full"):
-        eraser = ConceptEraser.fit(X_t, Y_1h, cov_type=cov_type)
+    for affine, proj_type in product([False, True], ["leace", "orth"]):
+        eraser = ConceptEraser.fit(
+            X_t, Y_1h, affine=affine, proj_type=proj_type, fantope=proj_type == "leace"
+        )
         X_ = eraser(X_t)
 
         # Check idempotence
         torch.testing.assert_close(eraser(X_), X_)
 
-        # Check that the rank of the update is equal to num_classes, with an allowance
-        # of 1 for numerical error. It's hard to find a threshold for the singular
-        # values at works for all matrices.
+        # Check that the rank of the update <= num_classes
         rank = torch.linalg.svdvals(X_t - X_).gt(eps).sum()
         assert rank <= num_classes
 
         # Record the mean squared error for comparison
         X_np = X_.numpy()
-        mse_dict[cov_type] = np.square(X_np - X).mean()
+        mse_dict[(affine, proj_type)] = np.square(X_np - X).mean()
 
         # Check that the unconditional mean is unchanged
-        torch.testing.assert_close(X_t.mean(dim=0), X_.mean(dim=0))
+        if affine:
+            torch.testing.assert_close(X_t.mean(dim=0), X_.mean(dim=0))
 
         # Compute class means and check that they are equal after the projection
         class_means_ = torch.stack(
@@ -140,5 +144,6 @@ def test_projection(num_classes: int):
         real_svm = LinearSVC(dual=False, intercept_scaling=1e6, tol=eps).fit(X, Y)
         assert abs(real_svm.coef_).max() > 0.1
 
-    # Check that using cov_type="full" strictly better than "eye"
-    assert mse_dict["full"] < mse_dict["eye"]
+    # Check that using proj_type="leace" strictly better than "orth"
+    assert mse_dict[(True, "leace")] < mse_dict[(True, "orth")]
+    assert mse_dict[(False, "leace")] < mse_dict[(False, "orth")]

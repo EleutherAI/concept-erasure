@@ -10,7 +10,8 @@ requires-python = ">=3.10"
 keywords = ["fairness", "interpretability", "explainable-ai"]
 license = {text = "MIT License"}
 dependencies = [
-    "torch",
+    # We use F.scaled_dot_product_attention, which was introduced in 2.0.0
+    "torch>=2.0.0",
     # 4.0 introduced the breaking change of using return_dict=True by default
     "transformers>=4.0.0",
 ]
