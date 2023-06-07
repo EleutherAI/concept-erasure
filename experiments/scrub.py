@@ -87,7 +87,7 @@ if __name__ == "__main__":
 
     if args.random:
         k = assert_type(int, train.features[args.z_column].feature.num_classes)
-        scrubber = ConceptScrubber.from_model(model, z_dim=k, proj_type=args.proj_type)
+        scrubber = ConceptScrubber.from_model(model, z_dim=k, method=args.method)
         # del scrubber.erasers["final_layer_norm"]
         del scrubber.erasers["norm"]
 
@@ -116,7 +116,7 @@ if __name__ == "__main__":
         train,
         affine=not args.no_bias,
         batch_size=args.batch_size,
-        proj_type=args.proj_type,
+        method=args.method,
         sublayers=not args.skip_sublayers,
         z_column=args.z_column,
     )

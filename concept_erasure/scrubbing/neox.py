@@ -1,5 +1,4 @@
 from types import MethodType
-from typing import Literal
 
 import torch
 import torch.nn.functional as F
@@ -12,7 +11,7 @@ from transformers import (
 )
 from transformers.models.gpt_neox.modeling_gpt_neox import GPTNeoXAttention
 
-from concept_erasure import ConceptEraser, ConceptScrubber
+from concept_erasure import ConceptEraser, ConceptScrubber, ErasureMethod
 from concept_erasure.utils import assert_type
 
 
@@ -38,7 +37,7 @@ def scrub_neox(
     train: Dataset,
     z_column: str | None,
     batch_size: int = 32,
-    proj_type: Literal["leace", "loracs", "orth"] = "leace",
+    method: ErasureMethod = "leace",
     affine: bool = True,
 ) -> tuple[ConceptScrubber | None, float]:
     base = assert_type(GPTNeoXModel, model.base_model)
@@ -82,12 +81,12 @@ def scrub_neox(
         attn_eraser, mlp_eraser = None, None
         if scrubber is not None:
             attn_eraser = ConceptEraser(
-                d, k, affine=affine, device=model.device, proj_type=proj_type
+                d, k, affine=affine, device=model.device, method=method
             )
             scrubber.erasers[f"layers-{j}-input_layernorm"] = attn_eraser
 
             mlp_eraser = ConceptEraser(
-                d, k, affine=affine, device=model.device, proj_type=proj_type
+                d, k, affine=affine, device=model.device, method=method
             )
             scrubber.erasers[f"layers-{j}-post_attention_layernorm"] = mlp_eraser
 

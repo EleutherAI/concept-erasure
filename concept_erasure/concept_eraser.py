@@ -3,9 +3,21 @@ from typing import Literal
 import torch
 from torch import Tensor, nn
 
+ErasureMethod = Literal["leace", "orth", "relaxed"]
+
 
 class ConceptEraser(nn.Module):
-    """Minimally edit features to make specified concepts linearly undetectable."""
+    """Minimally edit features to make specified concepts linearly undetectable.
+
+    There are three erasure methods currently supported:
+    - `"leace"`: Least-squares Concept Erasure from https://arxiv.org/abs/2306.03819.
+    - `"orth"`: Orthogonal projection onto colsp(Sigma_xz)^perp.
+    - `"relaxed"`: Applies a PSD map with spectral norm <= 1 that ensures the resulting
+    cross-covariance matrix Cov(PX, Z) has spectral norm no greater than `svd_tol`.
+    Importantly, this method **does not** ensure linear guardedness, but may be useful
+    for concept scrubbing purposes. It has the benefit of being less sensitive to noise
+    and the choice of `svd_tol` than other methods.
+    """
 
     mean_x: Tensor
     """Running mean of X."""
@@ -28,20 +40,21 @@ class ConceptEraser(nn.Module):
     _P: Tensor | None
 
     @classmethod
-    def fit(cls, x: Tensor, y: Tensor, **kwargs) -> "ConceptEraser":
+    def fit(cls, x: Tensor, z: Tensor, **kwargs) -> "ConceptEraser":
         """Convenience method to fit a ConceptEraser on data and return it."""
         n, d = x.shape
-        _, k = y.reshape(n, -1).shape
+        _, k = z.reshape(n, -1).shape
 
-        return cls(d, k, device=x.device, dtype=x.dtype, **kwargs).update(x, y)
+        return cls(d, k, device=x.device, dtype=x.dtype, **kwargs).update(x, z)
 
     def __init__(
         self,
         x_dim: int,
         z_dim: int,
-        proj_type: Literal["leace", "orth", "relaxed"] = "leace",
+        method: ErasureMethod = "leace",
         *,
         affine: bool = True,
+        constrain_cov_trace: bool = True,
         device: str | torch.device | None = None,
         dtype: torch.dtype | None = None,
         svd_tol: float = 0.01,
@@ -51,9 +64,14 @@ class ConceptEraser(nn.Module):
         Args:
             x_dim: Dimensionality of the input.
             z_dim: Dimensionality of the labels.
-            proj_type: Type of projection matrix to use.
+            method: Type of projection matrix to use.
             affine: Whether to use a bias term to ensure the unconditional mean of the
                 features remains the same after erasure.
+            constrain_cov_trace: Whether to constrain the trace of the covariance of X
+                after erasure to be no greater than before erasure. This is especially
+                useful when injecting the scrubbed features back into a model. Without
+                this constraint, the norm of the model's hidden states may diverge in
+                some cases.
             device: Device to put the statistics on.
             dtype: Data type to use for the statistics.
             svd_tol: Singular values under this threshold are truncated, both during
@@ -68,8 +86,9 @@ class ConceptEraser(nn.Module):
         self.x_dim = x_dim
 
         self.affine = affine
+        self.constrain_cov_trace = constrain_cov_trace
         self.proj_rank = z_dim
-        self.proj_type = proj_type
+        self.method = method
         self.z_dim = z_dim
 
         assert svd_tol > 0.0, "`svd_tol` must be positive for numerical stability."
@@ -85,12 +104,12 @@ class ConceptEraser(nn.Module):
         self.register_buffer("n_z", torch.tensor(0, device=device, dtype=dtype))
         self.register_buffer("_P", None)
 
-        if self.proj_type == "leace":
+        if self.method == "leace":
             M2 = self.mean_x.new_zeros(x_dim, x_dim)
-        elif self.proj_type in ("orth", "relaxed"):
+        elif self.method in ("orth", "relaxed"):
             M2 = None
         else:
-            raise ValueError(f"Unknown projection type {self.proj_type}")
+            raise ValueError(f"Unknown projection type {self.method}")
 
         self.register_buffer("x_M2", M2)
 
@@ -139,7 +158,7 @@ class ConceptEraser(nn.Module):
         delta_x2 = x - self.mean_x
 
         # Update the covariance matrix of X if needed (for LEACE)
-        if self.proj_type == "leace":
+        if self.method == "leace":
             assert self.x_M2 is not None
             self.x_M2.addmm_(delta_x.mT, delta_x2)
 
@@ -172,7 +191,7 @@ class ConceptEraser(nn.Module):
         eye = torch.eye(self.x_dim, device=self.mean_x.device, dtype=self.mean_x.dtype)
         u, s, _ = torch.linalg.svd(self.sigma_xz, full_matrices=False)
 
-        if self.proj_type == "relaxed":
+        if self.method == "relaxed":
             # Treat `svd_tol` as a constraint on the spectral norm of sigma_xz after
             # erasure. In this case Q is not actually a projection matrix, it's a
             # PSD non-expansive map (spectral norm <= 1).
@@ -189,7 +208,7 @@ class ConceptEraser(nn.Module):
             # Save this for debugging
             self.proj_rank = mask.sum().item()
 
-        if self.proj_type != "leace":
+        if self.method != "leace":
             self._P = Q
             return self._P
 
@@ -225,7 +244,7 @@ class ConceptEraser(nn.Module):
         # If applying the projection matrix increases the variance, this might
         # cause instability, especially when erasure is applied multiple times.
         # We regularize toward the orthogonal projection matrix to avoid this.
-        if new_trace > old_trace:
+        if self.constrain_cov_trace and new_trace > old_trace:
             # Set up the variables for the quadratic equation
             x = new_trace
             y = 2 * torch.trace(P @ sigma @ Q.mT)

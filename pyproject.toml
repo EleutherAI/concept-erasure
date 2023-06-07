@@ -11,12 +11,11 @@ keywords = ["fairness", "interpretability", "explainable-ai"]
 license = {text = "MIT License"}
 dependencies = [
     "datasets",
-    # We use F.scaled_dot_product_attention, which was introduced in 2.0.0
-    "torch>=2.0.0",
+    "torch",
     # 4.0 introduced the breaking change of using return_dict=True by default
     "transformers>=4.0.0",
 ]
-version = "0.0.1"
+version = "0.0.2"
 
 [project.optional-dependencies]
 dev = [

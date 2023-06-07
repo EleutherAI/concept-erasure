@@ -1,5 +1,4 @@
 from types import MethodType
-from typing import Literal
 
 import torch
 import torch.nn.functional as F
@@ -15,7 +14,7 @@ from transformers.models.llama.modeling_llama import (
     apply_rotary_pos_emb,
 )
 
-from concept_erasure import ConceptEraser, ConceptScrubber
+from concept_erasure import ConceptEraser, ConceptScrubber, ErasureMethod
 from concept_erasure.utils import assert_type
 
 
@@ -83,7 +82,7 @@ def scrub_llama(
     train: Dataset,
     z_column: str | None,
     batch_size: int = 1,
-    proj_type: Literal["leace", "loracs", "orth"] = "leace",
+    method: ErasureMethod = "leace",
     sublayers: bool = True,
     affine: bool = True,
 ) -> tuple[ConceptScrubber | None, float]:
@@ -124,7 +123,7 @@ def scrub_llama(
         attn_eraser = None
         if scrubber is not None:
             attn_eraser = ConceptEraser(
-                d, k, affine=affine, device=model.device, proj_type=proj_type
+                d, k, affine=affine, device=model.device, method=method
             )
             scrubber.erasers[f"layers-{j}-input_layernorm"] = attn_eraser
 
@@ -167,7 +166,7 @@ def scrub_llama(
         mlp_eraser = None
         if scrubber is not None:
             mlp_eraser = ConceptEraser(
-                d, k, affine=affine, device=model.device, proj_type=proj_type
+                d, k, affine=affine, device=model.device, method=method
             )
             scrubber.erasers[f"layers-{j}-post_attention_layernorm"] = mlp_eraser
 

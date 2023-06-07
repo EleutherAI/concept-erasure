@@ -1,16 +1,18 @@
 from contextlib import contextmanager
 from functools import partial
-from typing import Callable, Literal
+from typing import Callable
 
 import torch
 from torch import Tensor, nn
 from transformers import PreTrainedModel
 
-from .concept_eraser import ConceptEraser
+from .concept_eraser import ConceptEraser, ErasureMethod
 from .utils import assert_type, is_norm_layer, mangle_module_path
 
 
 class ConceptScrubber(nn.Module):
+    """Wrapper for a dictionary mapping module paths to `ConceptEraser` objects."""
+
     @classmethod
     def from_model(
         cls,
@@ -18,9 +20,10 @@ class ConceptScrubber(nn.Module):
         z_dim: int = 1,
         affine: bool = True,
         module_suffix: str = "",
-        proj_type: Literal["leace", "orth"] = "leace",
+        method: ErasureMethod = "leace",
         pre_hook: bool = False,
     ):
+        """Create a scrubber with a `ConceptEraser` for each norm layer in `model`."""
         d_model = model.config.hidden_size
 
         scrubber = cls(pre_hook=pre_hook)
@@ -31,7 +34,7 @@ class ConceptScrubber(nn.Module):
                     z_dim,
                     affine=affine,
                     device=model.device,
-                    proj_type=proj_type,
+                    method=method,
                 )
                 # Note that we are unwrapping the base model here
                 for name, mod in model.base_model.named_modules()
@@ -47,29 +50,11 @@ class ConceptScrubber(nn.Module):
         self.pre_hook = pre_hook
 
     @contextmanager
-    def record(
-        self,
-        model: PreTrainedModel,
-        label: Tensor | None = None,
-    ):
-        """Update erasers with the activations of the model, using the given label.
-
-        This method adds a forward pre-hook to each layer of the model, which
-        records its input activations. These are used to update the erasers.
-        """
-
-        def record_hook(eraser: ConceptEraser, x: Tensor):
-            eraser.update(x, label)
-
-        with self.apply_hook(model, record_hook):
-            yield self
-
-    @contextmanager
-    def scrub(self, model, dry_run: bool = False):
+    def scrub(self, model):
         """Add hooks to the model which apply the erasers during a forward pass."""
 
         def scrub_hook(eraser: ConceptEraser, x: Tensor):
-            return eraser(x).type_as(x) if not dry_run else x
+            return eraser(x).type_as(x)
 
         with self.apply_hook(model, scrub_hook):
             yield self

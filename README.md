@@ -1,6 +1,12 @@
 # Least-Squares Concept Erasure (LEACE)
 Concept erasure aims to remove specified features from a representation. It can be used to improve fairness (e.g. preventing a classifier from using gender or race) and interpretability (e.g. removing a concept to observe changes in model behavior). This is the repo for **LEAst-squares Concept Erasure (LEACE)**, a closed-form method which provably prevents all linear classifiers from detecting a concept while inflicting the least possible damage to the representation. You can check out the paper [here](https://arxiv.org/abs/2306.03819).
 
+# Installation
+
+```bash
+pip install concept-erasure
+```
+
 # Usage
 
 `ConceptEraser` is the central class in this repo. It keeps track of the covariance and cross-covariance statistics needed to erase a concept, and lazily computes the LEACE parameters when needed.

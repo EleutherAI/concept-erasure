@@ -75,8 +75,8 @@ def test_projection(num_classes: int):
     eps = 2e-9
     mse_dict: dict[tuple[bool, str], float] = {}
 
-    for affine, proj_type in product([False, True], ["leace", "orth"]):
-        eraser = ConceptEraser.fit(X_t, Y_1h, affine=affine, proj_type=proj_type)
+    for affine, method in product([False, True], ["leace", "orth"]):
+        eraser = ConceptEraser.fit(X_t, Y_1h, affine=affine, method=method)
         X_ = eraser(X_t)
 
         # Check idempotence
@@ -88,7 +88,7 @@ def test_projection(num_classes: int):
 
         # Record the mean squared error for comparison
         X_np = X_.numpy()
-        mse_dict[(affine, proj_type)] = np.square(X_np - X).mean()
+        mse_dict[(affine, method)] = np.square(X_np - X).mean()
 
         # Check that the unconditional mean is unchanged
         if affine:
@@ -141,6 +141,6 @@ def test_projection(num_classes: int):
         real_svm = LinearSVC(dual=False, intercept_scaling=1e6, tol=eps).fit(X, Y)
         assert abs(real_svm.coef_).max() > 0.1
 
-    # Check that using proj_type="leace" strictly better than "orth"
+    # Check that using method="leace" strictly better than "orth"
     assert mse_dict[(True, "leace")] < mse_dict[(True, "orth")]
     assert mse_dict[(False, "leace")] < mse_dict[(False, "orth")]
