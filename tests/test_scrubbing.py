@@ -8,6 +8,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from concept_erasure.scrubbing import patch_attention_, scrub
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("model_str", ["EleutherAI/pythia-160m", "huggyllama/llama-7b"])
 @torch.inference_mode()
 def test_scrubbing(model_str: str):
