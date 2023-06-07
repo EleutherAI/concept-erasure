@@ -23,7 +23,7 @@ class ConceptScrubber(nn.Module):
     ):
         d_model = model.config.hidden_size
 
-        scrubber = cls()
+        scrubber = cls(pre_hook=pre_hook)
         scrubber.erasers.update(
             {
                 mangle_module_path(name): ConceptEraser(

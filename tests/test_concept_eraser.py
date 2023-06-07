@@ -16,7 +16,6 @@ def test_stats():
     batch_size = 10
     num_batches = 5
 
-    # Turn off eigenvalue clipping for testing
     eraser = ConceptEraser(num_features, num_classes)
 
     # Generate random data
@@ -77,9 +76,7 @@ def test_projection(num_classes: int):
     mse_dict: dict[tuple[bool, str], float] = {}
 
     for affine, proj_type in product([False, True], ["leace", "orth"]):
-        eraser = ConceptEraser.fit(
-            X_t, Y_1h, affine=affine, proj_type=proj_type, fantope=proj_type == "leace"
-        )
+        eraser = ConceptEraser.fit(X_t, Y_1h, affine=affine, proj_type=proj_type)
         X_ = eraser(X_t)
 
         # Check idempotence
