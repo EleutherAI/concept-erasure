@@ -78,7 +78,7 @@ x_ = eraser(X_t[0])
 
 # Paper replication
 
-Scripts used to generate the part-of-speech tags for the concept scrubbing experiments can be found in the `experiments` folder. We plan to upload the tagged datasets to the HuggingFace Hub shortly.
+Scripts used to generate the part-of-speech tags for the concept scrubbing experiments can be found in [this repo](https://github.com/EleutherAI/tagged-pile). We plan to upload the tagged datasets to the HuggingFace Hub shortly.
 
 ## Concept scrubbing
 
