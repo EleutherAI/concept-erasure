@@ -25,17 +25,14 @@ class ConceptEraser(nn.Module):
     mean_z: Tensor
     """Running mean of Z."""
 
-    sigma_xz_M2: Tensor
+    sigma_xz_: Tensor
     """Unnormalized cross-covariance matrix X^T Z."""
 
-    x_M2: Tensor | None
+    sigma_: Tensor | None
     """Unnormalized covariance matrix X^T X."""
 
-    n_x: Tensor
+    n: Tensor
     """Number of X samples seen so far."""
-
-    n_z: Tensor
-    """Number of Z samples seen so far."""
 
     _P: Tensor | None
 
@@ -82,8 +79,8 @@ class ConceptEraser(nn.Module):
         """
         super().__init__()
 
-        self.z_dim = z_dim
         self.x_dim = x_dim
+        self.z_dim = z_dim
 
         self.affine = affine
         self.constrain_cov_trace = constrain_cov_trace
@@ -97,11 +94,10 @@ class ConceptEraser(nn.Module):
         self.register_buffer("mean_x", torch.zeros(x_dim, device=device, dtype=dtype))
         self.register_buffer("mean_z", self.mean_x.new_zeros(z_dim))
         self.register_buffer(
-            "sigma_xz_M2",
+            "sigma_xz_",
             self.mean_x.new_zeros(x_dim, z_dim),
         )
-        self.register_buffer("n_x", torch.tensor(0, device=device, dtype=dtype))
-        self.register_buffer("n_z", torch.tensor(0, device=device, dtype=dtype))
+        self.register_buffer("n", torch.tensor(0, device=device, dtype=dtype))
         self.register_buffer("_P", None)
 
         if self.method == "leace":
@@ -111,7 +107,7 @@ class ConceptEraser(nn.Module):
         else:
             raise ValueError(f"Unknown projection type {self.method}")
 
-        self.register_buffer("x_M2", M2)
+        self.register_buffer("sigma_", M2)
 
     def forward(self, x: Tensor) -> Tensor:
         """Minimally edit `x` to remove correlations with the target concepts.
@@ -122,8 +118,8 @@ class ConceptEraser(nn.Module):
         Returns:
             The edited representations of shape (..., x_dim).
         """
-        d, _ = self.sigma_xz_M2.shape
-        assert self.n_x > 0, "Call update() before forward()"
+        d, _ = self.sigma_xz_.shape
+        assert self.n > 0, "Call update() before forward()"
         assert x.shape[-1] == d
 
         if self.affine:
@@ -133,52 +129,37 @@ class ConceptEraser(nn.Module):
             return (x.type_as(self.P) @ self.P.T).type_as(x)
 
     @torch.no_grad()
-    def update(self, x: Tensor, z: Tensor | None = None) -> "ConceptEraser":
-        """Update the running statistics with a new batch of data.
-
-        It's possible to call this method without `z` if you only want to update the
-        statistics of X. This is useful if you don't have labels but want to adjust the
-        mean and covariance of X to match a new dataset.
-        """
-        d, c = self.sigma_xz_M2.shape
+    def update(self, x: Tensor, z: Tensor) -> "ConceptEraser":
+        """Update the running statistics with a new batch of data."""
+        d, c = self.sigma_xz_.shape
         x = x.reshape(-1, d).type_as(self.mean_x)
-
-        if not x.isfinite().all():
-            raise RuntimeError("Non-finite values in input")
-
         n, d2 = x.shape
-        assert d == d2, f"Unexpected number of features {d2}"
 
-        # We always have an X, we might not have a Z
-        self.n_x += n
+        assert d == d2, f"Unexpected number of features {d2}"
+        self.n += n
 
         # Welford's online algorithm
         delta_x = x - self.mean_x
-        self.mean_x += delta_x.sum(dim=0) / self.n_x
+        self.mean_x += delta_x.sum(dim=0) / self.n
         delta_x2 = x - self.mean_x
 
         # Update the covariance matrix of X if needed (for LEACE)
         if self.method == "leace":
-            assert self.x_M2 is not None
-            self.x_M2.addmm_(delta_x.mT, delta_x2)
+            assert self.sigma_ is not None
+            self.sigma_.addmm_(delta_x.mT, delta_x2)
 
         # Invalidate the cached projection matrix
         self._P = None
 
-        # We do have labels, so we can update the Z statistics
-        if z is not None:
-            # y might start out 1D, but we want to treat it as 2D
-            z = z.reshape(n, -1).type_as(x)
-            assert z.shape[-1] == c, f"Unexpected number of classes {z.shape[-1]}"
+        z = z.reshape(n, -1).type_as(x)
+        assert z.shape[-1] == c, f"Unexpected number of classes {z.shape[-1]}"
 
-            self.n_z += n
+        delta_z = z - self.mean_z
+        self.mean_z += delta_z.sum(dim=0) / self.n
+        delta_z2 = z - self.mean_z
 
-            delta_z = z - self.mean_z
-            self.mean_z += delta_z.sum(dim=0) / self.n_x
-            delta_z2 = z - self.mean_z
-
-            # Update the cross-covariance matrix
-            self.sigma_xz_M2.addmm_(delta_x.mT, delta_z2)
+        # Update the cross-covariance matrix
+        self.sigma_xz_.addmm_(delta_x.mT, delta_z2)
 
         return self
 
@@ -222,7 +203,7 @@ class ConceptEraser(nn.Module):
 
         # LEACE and orthogonal projection matrix computation
         # Adjust Q to account for the covariance of X
-        sigma = self.cov_x
+        sigma = self.sigma_xx
         A = Q @ sigma @ Q
         try:
             L, V = torch.linalg.eigh(A)
@@ -264,26 +245,30 @@ class ConceptEraser(nn.Module):
         return P
 
     @property
-    def cov_x(self) -> Tensor:
+    def sigma(self) -> Tensor:
         """The covariance matrix of X."""
-        assert self.n_x > 1, "Call update() before accessing cov_x"
+        assert self.n > 1, "Call update() before accessing sigma_xx"
         assert (
-            self.x_M2 is not None
+            self.sigma_ is not None
         ), "Covariance statistics are not being tracked for X"
 
-        cov = self.x_M2 / (self.n_x - 1)
+        cov = self.sigma_ / (self.n - 1)
 
         # Accumulated numerical error may cause this to be slightly non-symmetric
         return (cov + cov.mT) / 2
 
+    # Support multiple naming conventions
+    cov_x = sigma
+    sigma_xx = sigma
+
     @property
     def sigma_xz(self) -> Tensor:
         """The cross-covariance matrix."""
-        assert self.n_z > 1, "Call update() with labels before accessing sigma_xz"
-        return self.sigma_xz_M2 / (self.n_z - 1)
+        assert self.n > 1, "Call update() with labels before accessing sigma_xz"
+        return self.sigma_xz_ / (self.n - 1)
 
     def finalize(self) -> "ConceptEraser":
         """Compute the projection matrix and drop covariance matrices."""
         self.P
-        self.x_M2 = None
+        self.sigma_ = None
         return self

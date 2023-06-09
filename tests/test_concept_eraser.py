@@ -45,7 +45,7 @@ def test_stats():
     expected_sigma_xz /= batch_size * num_batches - 1
 
     # Compare the computed cross-covariance matrix with the expected one
-    torch.testing.assert_close(eraser.cov_x, expected_cov)
+    torch.testing.assert_close(eraser.sigma_xx, expected_cov)
     torch.testing.assert_close(eraser.sigma_xz, expected_sigma_xz)
 
 

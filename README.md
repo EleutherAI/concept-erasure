@@ -3,6 +3,8 @@ Concept erasure aims to remove specified features from a representation. It can 
 
 # Installation
 
+We require Python 3.10 or later. You can install the package from PyPI:
+
 ```bash
 pip install concept-erasure
 ```
