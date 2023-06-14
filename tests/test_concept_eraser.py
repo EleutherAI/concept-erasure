@@ -1,8 +1,8 @@
 from itertools import product
 
-import numpy as np
 import pytest
 import torch
+import torch.nn.functional as F
 from sklearn.datasets import make_classification
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import LinearSVC
@@ -53,7 +53,6 @@ def test_stats():
 # encoded in a 1D one-hot vector, while `2` means the labels are encoded in an
 # n x 2 one-hot matrix.
 @pytest.mark.parametrize("num_classes", [1, 2, 3, 5, 10, 20])
-@torch.no_grad()
 def test_projection(num_classes: int):
     n, d = 2048, 128
     num_distinct = max(num_classes, 2)
@@ -73,11 +72,25 @@ def test_projection(num_classes: int):
         Y_1h = Y_t
 
     eps = 2e-9
-    mse_dict: dict[tuple[bool, str], float] = {}
-
     for affine, method in product([False, True], ["leace", "orth"]):
         eraser = ConceptEraser.fit(X_t, Y_1h, affine=affine, method=method)
         X_ = eraser(X_t)
+
+        # Check first-order optimality condition. To account for the nullspace
+        # constraint, we use the canonical form for oblique projection matrices,
+        # fixing the nullspace and only optimizing over the range space.
+        A, s, B_t = torch.linalg.svd(eraser.P)
+        A, B = A[:, s > 0.5].requires_grad_(True), B_t[s > 0.5].T
+
+        # See "A matrix representation formula for a nonzero projection operator" in
+        # https://en.wikipedia.org/wiki/Projection_(linear_algebra)
+        P = A @ torch.inverse(B.T @ A) @ B.T
+        x_ = (X_t - eraser.mean_x) @ P.T + eraser.mean_x if affine else X_t @ P.T
+        loss = F.mse_loss(x_, X_t)
+        loss.backward()
+
+        # Should be optimal iff we're using LEACE with the bias term
+        assert (A.grad.norm() < eps) == (affine and method == "leace")
 
         # Check idempotence
         torch.testing.assert_close(eraser(X_), X_)
@@ -85,10 +98,6 @@ def test_projection(num_classes: int):
         # Check that the rank of the update <= num_classes
         rank = torch.linalg.svdvals(X_t - X_).gt(eps).sum()
         assert rank <= num_classes
-
-        # Record the mean squared error for comparison
-        X_np = X_.numpy()
-        mse_dict[(affine, method)] = np.square(X_np - X).mean()
 
         # Check that the unconditional mean is unchanged
         if affine:
@@ -134,13 +143,9 @@ def test_projection(num_classes: int):
             # intercept can cause the coefficients to get larger than they should be.
             intercept_scaling=1e6,
             tol=eps,
-        ).fit(X_np, Y)
+        ).fit(X_.numpy(), Y)
         assert abs(null_svm.coef_).max() < eps
 
         # But it should learn something before the projection
         real_svm = LinearSVC(dual=False, intercept_scaling=1e6, tol=eps).fit(X, Y)
         assert abs(real_svm.coef_).max() > 0.1
-
-    # Check that using method="leace" strictly better than "orth"
-    assert mse_dict[(True, "leace")] < mse_dict[(True, "orth")]
-    assert mse_dict[(False, "leace")] < mse_dict[(False, "orth")]
