@@ -3,6 +3,8 @@ from typing import Literal
 import torch
 from torch import Tensor, nn
 
+from .shrinkage import gaussian_shrinkage
+
 ErasureMethod = Literal["leace", "orth"]
 
 
@@ -65,6 +67,7 @@ class ConceptEraser(nn.Module):
         constrain_cov_trace: bool = True,
         device: str | torch.device | None = None,
         dtype: torch.dtype | None = None,
+        shrinkage: bool = True,
         svd_tol: float = 0.01,
     ):
         """Initialize a ConceptEraser.
@@ -82,6 +85,7 @@ class ConceptEraser(nn.Module):
                 some cases.
             device: Device to put the statistics on.
             dtype: Data type to use for the statistics.
+            shrinkage: Whether to use shrinkage to estimate the covariance matrix of X.
             svd_tol: Singular values under this threshold are truncated, both during
                 the phase where we do SVD on the cross-covariance matrix, and at the
                 phase where we compute the pseudoinverse of the projected covariance
@@ -97,6 +101,7 @@ class ConceptEraser(nn.Module):
         self.constrain_cov_trace = constrain_cov_trace
         self.dirty = True
         self.method = method
+        self.shrinkage = shrinkage
 
         assert svd_tol > 0.0, "`svd_tol` must be positive for numerical stability."
         self.svd_tol = svd_tol
@@ -260,13 +265,18 @@ class ConceptEraser(nn.Module):
             self.sigma_ is not None
         ), "Covariance statistics are not being tracked for X"
 
-        cov = self.sigma_ / (self.n - 1)
-
         # Accumulated numerical error may cause this to be slightly non-symmetric
-        return (cov + cov.mT) / 2
+        S_hat = (self.sigma_ + self.sigma_.mT) / 2
 
-    # Support multiple naming conventions
-    cov_x = sigma
+        # Apply Rao-Blackwell Ledoit-Wolf shrinkage
+        if self.shrinkage:
+            return gaussian_shrinkage(S_hat / self.n, self.n)
+
+        # Just apply Bessel's correction
+        else:
+            return S_hat / (self.n - 1)
+
+    # Support naming conventions from both v1 and v2 of the paper
     sigma_xx = sigma
 
     @property

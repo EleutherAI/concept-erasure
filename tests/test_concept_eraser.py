@@ -7,16 +7,18 @@ from sklearn.datasets import make_classification
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import LinearSVC
 
-from concept_erasure import ConceptEraser
+from concept_erasure import ConceptEraser, gaussian_shrinkage
 
 
-def test_stats():
-    num_features = 3
-    num_classes = 2
+@pytest.mark.parametrize("shrinkage", [False, True])
+def test_stats(shrinkage: bool):
     batch_size = 10
     num_batches = 5
+    num_classes = 2
+    num_features = 3
+    N = batch_size * num_batches
 
-    eraser = ConceptEraser(num_features, num_classes)
+    eraser = ConceptEraser(num_features, num_classes, shrinkage=shrinkage)
 
     # Generate random data
     torch.manual_seed(42)
@@ -39,12 +41,14 @@ def test_stats():
     y_centered = y_all - mean_y
 
     expected_cov = torch.einsum("b...m,b...n->...mn", x_centered, x_centered)
-    expected_cov /= batch_size * num_batches - 1
+    if shrinkage:
+        expected_cov = gaussian_shrinkage(expected_cov / N, batch_size * num_batches)
+    else:
+        expected_cov /= N - 1
 
     expected_sigma_xz = torch.einsum("b...m,b...n->...mn", x_centered, y_centered)
-    expected_sigma_xz /= batch_size * num_batches - 1
+    expected_sigma_xz /= N - 1
 
-    # Compare the computed cross-covariance matrix with the expected one
     torch.testing.assert_close(eraser.sigma_xx, expected_cov)
     torch.testing.assert_close(eraser.sigma_xz, expected_sigma_xz)
 
@@ -71,9 +75,16 @@ def test_projection(num_classes: int):
     else:
         Y_1h = Y_t
 
+    bools = [False, True]
     eps = 2e-9
-    for affine, method in product([False, True], ["leace", "orth"]):
-        eraser = ConceptEraser.fit(X_t, Y_1h, affine=affine, method=method)
+    for affine, method, shrink in product(bools, ["leace", "orth"], bools):
+        # Shrinkage not applicable to orthogonal projection
+        if method == "orth" and shrink:
+            continue
+
+        eraser = ConceptEraser.fit(
+            X_t, Y_1h, affine=affine, method=method, shrinkage=shrink
+        )
         X_ = eraser(X_t)
 
         # Check first-order optimality condition. To account for the nullspace
@@ -86,11 +97,14 @@ def test_projection(num_classes: int):
         # https://en.wikipedia.org/wiki/Projection_(linear_algebra)
         P = A @ torch.inverse(B.T @ A) @ B.T
         x_ = (X_t - eraser.mean_x) @ P.T + eraser.mean_x if affine else X_t @ P.T
-        loss = F.mse_loss(x_, X_t)
+
+        # Define a random positive definite inner product
+        L = torch.randn(d, d, dtype=X_t.dtype) / d**0.5
+        loss = F.mse_loss(x_ @ L, X_t @ L)
         loss.backward()
 
-        # Should be optimal iff we're using LEACE with the bias term
-        assert (A.grad.norm() < eps) == (affine and method == "leace")
+        # Should be optimal iff we're using LEACE with the bias term and no shrinkage
+        assert (A.grad.norm() < eps) == (affine and method == "leace" and not shrink)
 
         # Check idempotence
         torch.testing.assert_close(eraser(X_), X_)
