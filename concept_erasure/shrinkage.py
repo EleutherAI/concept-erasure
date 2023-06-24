@@ -20,7 +20,7 @@ def gaussian_shrinkage(S_hat: Tensor, n: int | Tensor) -> Tensor:
     trace_sq_S = trace_S**2
 
     top = (n - 2) / n * trace_S_sq + trace_sq_S
-    bottom = (n + 2) * (trace_S_sq + trace_sq_S / p)
+    bottom = (n + 2) * (trace_S_sq - trace_sq_S / p)
     rho = torch.clamp(top / bottom, 0, 1)
 
     eye = torch.eye(p, dtype=S_hat.dtype, device=S_hat.device)
