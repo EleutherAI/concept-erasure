@@ -3,7 +3,7 @@ from typing import Literal
 import torch
 from torch import Tensor, nn
 
-from .shrinkage import gaussian_shrinkage
+from .shrinkage import oracle_shrinkage
 
 ErasureMethod = Literal["leace", "orth"]
 
@@ -268,9 +268,9 @@ class ConceptEraser(nn.Module):
         # Accumulated numerical error may cause this to be slightly non-symmetric
         S_hat = (self.sigma_ + self.sigma_.mT) / 2
 
-        # Apply Rao-Blackwell Ledoit-Wolf shrinkage
+        # Apply Oracle-Approximating Shrinkage (OAS)
         if self.shrinkage:
-            return gaussian_shrinkage(S_hat / self.n, self.n)
+            return oracle_shrinkage(S_hat / self.n, self.n)
 
         # Just apply Bessel's correction
         else:
