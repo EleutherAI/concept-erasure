@@ -9,13 +9,13 @@ from concept_erasure import oracle_shrinkage
     "p,n",
     [
         # Test the n < p case
-        (32, 25),
-        (64, 50),
-        (128, 100),
+        (32, 16),
+        (64, 32),
+        (128, 64),
         # And the n > p case
-        (32, 64),
-        (64, 128),
-        (128, 256),
+        (2, 64),
+        (4, 128),
+        (8, 256),
     ],
 )
 def test_oracle_shrinkage(p: int, n: int):
