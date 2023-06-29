@@ -2,31 +2,40 @@ import torch
 from torch import Tensor
 
 
-def oracle_shrinkage(S_hat: Tensor, n: int | Tensor) -> Tensor:
-    """Oracle-approximating shrinkage for a sample covariance matrix or batch thereof.
+def optimal_linear_shrinkage(S_n: Tensor, n: int | Tensor) -> Tensor:
+    """Optimal linear shrinkage for a sample covariance matrix or batch thereof.
 
-    Formula from https://arxiv.org/abs/0907.4698. Derivation assumes that the
-    datapoints are Gaussian, but is a consistent estimator under any distribution.
+    The formula is distribution-free and asymptotically optimal in the Frobenius norm
+    as the dimensionality and sample size tend to infinity.
+
+    See "On the Strong Convergence of the Optimal Linear Shrinkage Estimator for Large
+    Dimensional Covariance Matrix" <https://arxiv.org/abs/1308.2608> for details.
 
     Args:
-        S_hat: Sample covariance matrices of shape (*, p, p).
+        S_n: Sample covariance matrices of shape (*, p, p).
         n: Sample size.
     """
-    p = S_hat.shape[-1]
-    assert n > 1 and S_hat.shape[-2:] == (p, p)
+    p = S_n.shape[-1]
+    assert n > 1 and S_n.shape[-2:] == (p, p)
 
-    trace_S = trace(S_hat)
-    trace_S_sq = trace(S_hat**2)
-    trace_sq_S = trace_S**2
+    # Sigma0 is actually a free parameter; here we're using an isotropic
+    # covariance matrix with the same trace as S_n.
+    # TODO: Make this configurable, try using diag(S_n) or something
+    eye = torch.eye(p, dtype=S_n.dtype, device=S_n.device).expand_as(S_n)
+    trace_S = trace(S_n)
+    sigma0 = eye * trace_S / p
 
-    phi_hat = (trace_S_sq + trace_sq_S / p) / (trace_S_sq + trace_sq_S)
-    rho_inv = (n + 1 - 2 / p) * phi_hat
-    rho = torch.clamp(1 / rho_inv, 0, 1)
+    sigma0_norm_sq = sigma0.pow(2).sum(dim=(-2, -1), keepdim=True)
+    S_norm_sq = S_n.pow(2).sum(dim=(-2, -1), keepdim=True)
 
-    eye = torch.eye(p, dtype=S_hat.dtype, device=S_hat.device).expand_as(S_hat)
-    F_hat = eye * trace_S / p
+    prod_trace = trace(S_n @ sigma0)
+    top = trace_S.pow(2) * sigma0_norm_sq / n
+    bottom = S_norm_sq * sigma0_norm_sq - prod_trace**2
 
-    return (1 - rho) * S_hat + rho * F_hat
+    alpha = 1 - top / bottom
+    beta = (1 - alpha) * prod_trace / sigma0_norm_sq
+
+    return alpha * S_n + beta * sigma0
 
 
 def trace(matrices: Tensor) -> Tensor:

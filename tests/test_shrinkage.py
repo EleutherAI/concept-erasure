@@ -2,7 +2,7 @@ import pytest
 import torch
 from torch.distributions import MultivariateNormal
 
-from concept_erasure import oracle_shrinkage
+from concept_erasure import optimal_linear_shrinkage
 
 
 @pytest.mark.parametrize(
@@ -13,12 +13,12 @@ from concept_erasure import oracle_shrinkage
         (64, 32),
         (128, 64),
         # And the n > p case
-        (2, 64),
-        (4, 128),
-        (8, 256),
+        (4, 64),
+        (8, 128),
+        (16, 256),
     ],
 )
-def test_oracle_shrinkage(p: int, n: int):
+def test_olse_shrinkage(p: int, n: int):
     torch.manual_seed(42)
 
     # Number of matrices
@@ -40,10 +40,10 @@ def test_oracle_shrinkage(p: int, n: int):
     S_hat = (X_centered.mT @ X_centered) / n
 
     # Apply shrinkage
-    S_shrunk = oracle_shrinkage(S_hat, n)
+    S_olse = optimal_linear_shrinkage(S_hat, n)
 
     # Check that the Frobenius norm of the difference has decreased
-    norm_before = torch.norm(S_hat - S_true, dim=(-1, -2)).mean()
-    norm_after = torch.norm(S_shrunk - S_true, dim=(-1, -2)).mean()
+    norm_naive = torch.norm(S_hat - S_true, dim=(-1, -2)).mean()
+    norm_olse = torch.norm(S_olse - S_true, dim=(-1, -2)).mean()
 
-    assert norm_after <= norm_before
+    assert norm_olse <= norm_naive

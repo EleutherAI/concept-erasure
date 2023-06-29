@@ -3,7 +3,7 @@ from typing import Literal
 import torch
 from torch import Tensor, nn
 
-from .shrinkage import oracle_shrinkage
+from .shrinkage import optimal_linear_shrinkage
 
 ErasureMethod = Literal["leace", "orth"]
 
@@ -270,7 +270,7 @@ class ConceptEraser(nn.Module):
 
         # Apply Oracle-Approximating Shrinkage (OAS)
         if self.shrinkage:
-            return oracle_shrinkage(S_hat / self.n, self.n)
+            return optimal_linear_shrinkage(S_hat / self.n, self.n)
 
         # Just apply Bessel's correction
         else:

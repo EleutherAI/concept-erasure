@@ -7,7 +7,7 @@ from sklearn.datasets import make_classification
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import LinearSVC
 
-from concept_erasure import ConceptEraser, oracle_shrinkage
+from concept_erasure import ConceptEraser, optimal_linear_shrinkage
 
 
 @pytest.mark.parametrize("shrinkage", [False, True])
@@ -42,7 +42,9 @@ def test_stats(shrinkage: bool):
 
     expected_cov = torch.einsum("b...m,b...n->...mn", x_centered, x_centered)
     if shrinkage:
-        expected_cov = oracle_shrinkage(expected_cov / N, batch_size * num_batches)
+        expected_cov = optimal_linear_shrinkage(
+            expected_cov / N, batch_size * num_batches
+        )
     else:
         expected_cov /= N - 1
 
