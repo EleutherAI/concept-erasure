@@ -1,27 +1,56 @@
+from dataclasses import dataclass
 from typing import Literal
 
 import torch
-from torch import Tensor, nn
+from torch import Tensor
 
+from .caching import cached_property, invalidates_cache
 from .shrinkage import optimal_linear_shrinkage
 
 ErasureMethod = Literal["leace", "orth"]
 
 
-class ConceptEraser(nn.Module):
-    """Minimally edit features to make specified concepts linearly undetectable.
+@dataclass(frozen=True)
+class LeaceEraser:
+    """Compact LEACE eraser that surgically erases a concept from a representation."""
+
+    proj_left: Tensor
+    proj_right: Tensor
+    bias: Tensor | None
+
+    @classmethod
+    def fit(cls, x: Tensor, z: Tensor, **kwargs) -> "LeaceEraser":
+        """Convenience method to fit a LeaceEraser on data and return it."""
+        return LeaceFitter.fit(x, z, **kwargs).eraser
+
+    @property
+    def P(self) -> Tensor:
+        """The projection matrix."""
+        eye = torch.eye(
+            self.proj_left.shape[0],
+            device=self.proj_left.device,
+            dtype=self.proj_left.dtype,
+        )
+        return eye - self.proj_left @ self.proj_right
+
+    def __call__(self, x: Tensor) -> Tensor:
+        """Apply the projection to the input tensor."""
+        delta = x - self.bias if self.bias is not None else x
+
+        # Ensure we do the matmul in the most efficient order.
+        x_ = x - (delta @ self.proj_right.T) @ self.proj_left.T
+        return x_.type_as(x)
+
+
+class LeaceFitter:
+    """Fits a LEACE eraser that surgically erases a concept from a representation.
 
     This class implements Least-squares Concept Erasure (LEACE) from
     https://arxiv.org/abs/2306.03819. You can also use a slightly simpler orthogonal
     projection-based method by setting `method="orth"`.
 
-    This class stores both the covariance statistics needed to compute the LEACE
-    transformation, and the fitted parameters themselves. This allows the statistics to
-    be updated incrementally. The downside is that the covariance matrix of X takes
-    O(d^2) memory, which can become a problem when using many erasers at once for a
-    deep neural network. To mitigate this issue, we allow you to drop the covariance
-    matrix after fitting using the `finalize` method. After calling `finalize` this
-    class only takes O(dk) memory, where k is the dimensionality of Z.
+    This class stores the covariance statistics needed to compute the LEACE eraser.
+    This allows the statistics to be updated incrementally.
 
     Since the LEACE projection matrix is guaranteed to be a rank k - 1 perturbation of
     the identity, we store it implicitly in the d x k matrices `proj_left` and
@@ -37,25 +66,20 @@ class ConceptEraser(nn.Module):
     sigma_xz_: Tensor
     """Unnormalized cross-covariance matrix X^T Z."""
 
-    sigma_: Tensor | None
+    sigma_xx_: Tensor | None
     """Unnormalized covariance matrix X^T X."""
 
     n: Tensor
     """Number of X samples seen so far."""
 
-    proj_left: Tensor
-    """d x k matrix used for constructing the projection."""
-
-    proj_right: Tensor
-    """k x d matrix used for constructing the projection."""
-
     @classmethod
-    def fit(cls, x: Tensor, z: Tensor, **kwargs) -> "ConceptEraser":
-        """Convenience method to fit a ConceptEraser on data and return it."""
+    def fit(cls, x: Tensor, z: Tensor, **kwargs) -> "LeaceFitter":
+        """Convenience method to fit a LeaceFitter on data and return it."""
         n, d = x.shape
         _, k = z.reshape(n, -1).shape
 
-        return cls(d, k, device=x.device, dtype=x.dtype, **kwargs).update(x, z)
+        fitter = LeaceFitter(d, k, device=x.device, dtype=x.dtype, **kwargs)
+        return fitter.update(x, z)
 
     def __init__(
         self,
@@ -70,11 +94,11 @@ class ConceptEraser(nn.Module):
         shrinkage: bool = True,
         svd_tol: float = 0.01,
     ):
-        """Initialize a ConceptEraser.
+        """Initialize a `LeaceFitter`.
 
         Args:
-            x_dim: Dimensionality of the input.
-            z_dim: Dimensionality of the labels.
+            x_dim: Dimensionality of the representation.
+            z_dim: Dimensionality of the concept.
             method: Type of projection matrix to use.
             affine: Whether to use a bias term to ensure the unconditional mean of the
                 features remains the same after erasure.
@@ -99,54 +123,29 @@ class ConceptEraser(nn.Module):
 
         self.affine = affine
         self.constrain_cov_trace = constrain_cov_trace
-        self.dirty = True
         self.method = method
         self.shrinkage = shrinkage
 
         assert svd_tol > 0.0, "`svd_tol` must be positive for numerical stability."
         self.svd_tol = svd_tol
 
-        self.register_buffer("mean_x", torch.zeros(x_dim, device=device, dtype=dtype))
-        self.register_buffer("mean_z", self.mean_x.new_zeros(z_dim))
-        self.register_buffer(
-            "sigma_xz_",
-            self.mean_x.new_zeros(x_dim, z_dim),
-        )
-        self.register_buffer("n", torch.tensor(0, device=device, dtype=dtype))
+        self.mean_x = torch.zeros(x_dim, device=device, dtype=dtype)
+        self.mean_z = torch.zeros(z_dim, device=device, dtype=dtype)
 
-        rank = min(x_dim, z_dim)
-        self.register_buffer("proj_left", self.mean_x.new_zeros(x_dim, rank))
-        self.register_buffer("proj_right", self.mean_x.new_zeros(rank, x_dim))
+        self.n = torch.tensor(0, device=device, dtype=dtype)
+        self.sigma_xz_ = torch.zeros(x_dim, z_dim, device=device, dtype=dtype)
+        # self.sigma_zz_ = torch.zeros(z_dim, z_dim, device=device, dtype=dtype)
 
         if self.method == "leace":
-            M2 = self.mean_x.new_zeros(x_dim, x_dim)
+            self.sigma_xx_ = torch.zeros(x_dim, x_dim, device=device, dtype=dtype)
         elif self.method == "orth":
-            M2 = None
+            self.sigma_xx_ = None
         else:
             raise ValueError(f"Unknown projection type {self.method}")
 
-        self.register_buffer("sigma_", M2)
-
-    def forward(self, x: Tensor) -> Tensor:
-        """Minimally edit `x` to remove correlations with the target concepts.
-
-        Args:
-            x: Representations of shape (..., x_dim).
-
-        Returns:
-            The edited representations of shape (..., x_dim).
-        """
-        d, _ = self.sigma_xz_.shape
-        assert self.n > 0, "Call update() before forward()"
-        assert x.shape[-1] == d
-        self._compute_proj()  # Ensure the projection matrix is up to date
-
-        bias = self.mean_x if self.affine else 0.0
-        x_ = x - ((x - bias) @ self.proj_right.T) @ self.proj_left.T
-        return x_.type_as(x)
-
     @torch.no_grad()
-    def update(self, x: Tensor, z: Tensor) -> "ConceptEraser":
+    @invalidates_cache("eraser")
+    def update(self, x: Tensor, z: Tensor) -> "LeaceFitter":
         """Update the running statistics with a new batch of data."""
         d, c = self.sigma_xz_.shape
         x = x.reshape(-1, d).type_as(self.mean_x)
@@ -162,11 +161,8 @@ class ConceptEraser(nn.Module):
 
         # Update the covariance matrix of X if needed (for LEACE)
         if self.method == "leace":
-            assert self.sigma_ is not None
-            self.sigma_.addmm_(delta_x.mT, delta_x2)
-
-        # Invalidate the cached projection matrix
-        self.dirty = True
+            assert self.sigma_xx_ is not None
+            self.sigma_xx_.addmm_(delta_x.mT, delta_x2)
 
         z = z.reshape(n, -1).type_as(x)
         assert z.shape[-1] == c, f"Unexpected number of classes {z.shape[-1]}"
@@ -180,11 +176,9 @@ class ConceptEraser(nn.Module):
 
         return self
 
-    def _compute_proj(self):
-        # Only fit if the statistics are dirty
-        if not self.dirty:
-            return
-
+    @cached_property
+    def eraser(self) -> LeaceEraser:
+        """Erasure function lazily computed given the current statistics."""
         eye = torch.eye(self.x_dim, device=self.mean_x.device, dtype=self.mean_x.dtype)
 
         # Compute the whitening and unwhitening matrices
@@ -208,11 +202,11 @@ class ConceptEraser(nn.Module):
         # Throw away singular values that are too small
         u *= s > self.svd_tol
 
-        self.proj_left = W_inv @ u
-        self.proj_right = u.T @ W
+        proj_left = W_inv @ u
+        proj_right = u.T @ W
 
         if self.constrain_cov_trace and self.method == "leace":
-            P = eye - self.proj_left @ self.proj_right
+            P = eye - proj_left @ proj_right
 
             # Prevent the covariance trace from increasing
             sigma = self.sigma_xx
@@ -243,32 +237,27 @@ class ConceptEraser(nn.Module):
                 alpha = torch.where(alpha1 > 0, alpha1, alpha2).clamp(0, 1)
                 P = alpha * P + (1 - alpha) * Q
 
+                # TODO: Avoid using SVD here
                 u, s, vh = torch.linalg.svd(eye - P)
-                self.proj_left = u * s.sqrt()
-                self.proj_right = vh * s.sqrt()
+                proj_left = u * s.sqrt()
+                proj_right = vh * s.sqrt()
 
-        # Don't duplicate work
-        self.dirty = False
-
-    @property
-    def P(self) -> Tensor:
-        """Projection matrix used to erase information about Z from X."""
-        eye = torch.eye(self.x_dim, device=self.mean_x.device, dtype=self.mean_x.dtype)
-        self._compute_proj()
-        return eye - self.proj_left @ self.proj_right
+        return LeaceEraser(
+            proj_left, proj_right, bias=self.mean_x if self.affine else None
+        )
 
     @property
-    def sigma(self) -> Tensor:
+    def sigma_xx(self) -> Tensor:
         """The covariance matrix of X."""
         assert self.n > 1, "Call update() before accessing sigma_xx"
         assert (
-            self.sigma_ is not None
+            self.sigma_xx_ is not None
         ), "Covariance statistics are not being tracked for X"
 
         # Accumulated numerical error may cause this to be slightly non-symmetric
-        S_hat = (self.sigma_ + self.sigma_.mT) / 2
+        S_hat = (self.sigma_xx_ + self.sigma_xx_.mT) / 2
 
-        # Apply Oracle-Approximating Shrinkage (OAS)
+        # Apply Random Matrix Theory-based shrinkage
         if self.shrinkage:
             return optimal_linear_shrinkage(S_hat / self.n, self.n)
 
@@ -276,17 +265,8 @@ class ConceptEraser(nn.Module):
         else:
             return S_hat / (self.n - 1)
 
-    # Support naming conventions from both v1 and v2 of the paper
-    sigma_xx = sigma
-
     @property
     def sigma_xz(self) -> Tensor:
         """The cross-covariance matrix."""
         assert self.n > 1, "Call update() with labels before accessing sigma_xz"
         return self.sigma_xz_ / (self.n - 1)
-
-    def finalize(self) -> "ConceptEraser":
-        """Compute the projection matrix and drop covariance matrices."""
-        self._compute_proj()
-        self.sigma_ = None
-        return self

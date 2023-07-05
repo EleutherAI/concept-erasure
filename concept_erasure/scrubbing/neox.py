@@ -11,7 +11,7 @@ from transformers import (
 )
 from transformers.models.gpt_neox.modeling_gpt_neox import GPTNeoXAttention
 
-from concept_erasure import ConceptEraser, ConceptScrubber, ErasureMethod
+from concept_erasure import ConceptScrubber, ErasureMethod, LeaceFitter
 from concept_erasure.utils import assert_type
 
 
@@ -80,15 +80,15 @@ def scrub_neox(
 
         attn_eraser, mlp_eraser = None, None
         if scrubber is not None:
-            attn_eraser = ConceptEraser(
+            attn_fitter = LeaceFitter(
                 d, k, affine=affine, device=model.device, method=method
             )
-            scrubber.erasers[f"layers-{j}-input_layernorm"] = attn_eraser
+            scrubber.erasers[f"layers-{j}-input_layernorm"] = attn_fitter
 
-            mlp_eraser = ConceptEraser(
+            mlp_fitter = LeaceFitter(
                 d, k, affine=affine, device=model.device, method=method
             )
-            scrubber.erasers[f"layers-{j}-post_attention_layernorm"] = mlp_eraser
+            scrubber.erasers[f"layers-{j}-post_attention_layernorm"] = mlp_fitter
 
             # Fit the next eraser on the previous hidden states
             for i, (x, z) in tqdm(enumerate(zip(xs, zs)), desc="Fitting", total=N):
@@ -96,14 +96,13 @@ def scrub_neox(
 
                 # Discard post-LN output and recompute during application to save RAM
                 attn_norm_out = layer.input_layernorm(x)
-                attn_eraser.update(attn_norm_out, z)
+                attn_fitter.update(attn_norm_out, z)
 
                 mlp_norm_out = layer.post_attention_layernorm(attn_norm_out)
-                mlp_eraser.update(mlp_norm_out, z)
+                mlp_fitter.update(mlp_norm_out, z)
 
-            # Save VRAM by discarding the covariance matrices
-            attn_eraser.finalize()
-            mlp_eraser.finalize()
+            attn_eraser, mlp_eraser = attn_fitter.eraser, mlp_fitter.eraser
+            del attn_fitter, mlp_fitter  # Save VRAM
 
         # Run attention & MLP with the erasers we just fit
         for i, x in tqdm(enumerate(xs), desc="Applying", total=N):

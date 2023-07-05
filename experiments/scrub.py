@@ -12,7 +12,7 @@ from transformers import (
     PreTrainedTokenizerBase,
 )
 
-from concept_erasure import ConceptScrubber
+from concept_erasure import random_scrub
 from concept_erasure.scrubbing import patch_attention_, scrub
 from concept_erasure.utils import assert_type
 
@@ -87,9 +87,6 @@ if __name__ == "__main__":
 
     if args.random:
         k = assert_type(int, train.features[args.z_column].feature.num_classes)
-        scrubber = ConceptScrubber.from_model(model, z_dim=k, method=args.method)
-        # del scrubber.erasers["final_layer_norm"]
-        del scrubber.erasers["norm"]
 
         with torch.inference_mode():
             losses = []
@@ -103,7 +100,7 @@ if __name__ == "__main__":
                 assert isinstance(batch, dict)
 
                 tokens = assert_type(torch.Tensor, batch["input_ids"])
-                with scrubber.random_scrub(model):
+                with random_scrub(model, subspace_dim=k):
                     loss = model(tokens, labels=tokens).loss
                     losses.append(loss)
 
@@ -122,5 +119,6 @@ if __name__ == "__main__":
     )
     print(f"Train loss (bits per byte): {dirty_loss * nats_to_bpb:.2f}")
 
-    with scrubber.scrub(model):
-        evaluate(test, model, args, nats_to_bpb)
+    if scrubber:
+        with scrubber.scrub(model):
+            evaluate(test, model, args, nats_to_bpb)

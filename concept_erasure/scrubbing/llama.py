@@ -14,7 +14,7 @@ from transformers.models.llama.modeling_llama import (
     apply_rotary_pos_emb,
 )
 
-from concept_erasure import ConceptEraser, ConceptScrubber, ErasureMethod
+from concept_erasure import ConceptScrubber, ErasureMethod, LeaceFitter
 from concept_erasure.utils import assert_type
 
 
@@ -122,10 +122,9 @@ def scrub_llama(
 
         attn_eraser = None
         if scrubber is not None:
-            attn_eraser = ConceptEraser(
+            attn_fitter = LeaceFitter(
                 d, k, affine=affine, device=model.device, method=method
             )
-            scrubber.erasers[f"layers-{j}-input_layernorm"] = attn_eraser
 
             # Fit the next eraser on the previous hidden states
             for x, z in tqdm(zip(xs, zs), desc="Fitting (attn)", total=N):
@@ -133,7 +132,11 @@ def scrub_llama(
 
                 # Discard post-LN output and recompute during application to save RAM
                 x = layer.input_layernorm(x.to(model.device))
-                attn_eraser.update(x, z)
+                attn_fitter.update(x, z)
+
+            attn_eraser = attn_fitter.eraser
+            scrubber.erasers[f"layers-{j}-input_layernorm"] = attn_eraser
+            del attn_fitter  # Save VRAM
 
         # Run attention & MLP with the erasers we just fit
         for i, x in tqdm(enumerate(xs), desc="Applying (attn)", total=N):
@@ -142,7 +145,7 @@ def scrub_llama(
             h = layer.input_layernorm(x)  # Recomputing from above
 
             # Apply the eraser
-            if scrubber is not None:
+            if attn_eraser is not None and scrubber is not None:
                 h = attn_eraser(h).type_as(h)
 
             pos_ids = torch.arange(0, h.shape[-2], device=h.device, dtype=torch.long)
@@ -165,10 +168,9 @@ def scrub_llama(
 
         mlp_eraser = None
         if scrubber is not None:
-            mlp_eraser = ConceptEraser(
+            mlp_fitter = LeaceFitter(
                 d, k, affine=affine, device=model.device, method=method
             )
-            scrubber.erasers[f"layers-{j}-post_attention_layernorm"] = mlp_eraser
 
             # Fit the next eraser on the previous hidden states
             for x, z in tqdm(zip(xs, zs), desc="Fitting (MLP)", total=N):
@@ -176,7 +178,11 @@ def scrub_llama(
 
                 # Discard post-LN output and recompute during application to save RAM
                 x = layer.post_attention_layernorm(x.to(model.device))
-                mlp_eraser.update(x, z)
+                mlp_fitter.update(x, z)
+
+            mlp_eraser = mlp_fitter.eraser
+            scrubber.erasers[f"layers-{j}-post_attention_layernorm"] = mlp_eraser
+            del mlp_fitter  # Save VRAM
 
         for i, x in tqdm(enumerate(xs), desc="Applying (MLP)", total=N):
             # Bring back to the accelerator
@@ -184,8 +190,8 @@ def scrub_llama(
             h = layer.post_attention_layernorm(x)  # Recomputing from above
 
             # Apply the eraser
-            if scrubber is not None:
-                h = mlp_eraser(h).type_as(h)
+            if mlp_eraser is not None and scrubber is not None:
+                h = mlp_eraser.eraser(h).type_as(h)
 
             h = layer.mlp(h)
             h = x + h  # Post-MLP residual connection

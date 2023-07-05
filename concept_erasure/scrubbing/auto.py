@@ -4,8 +4,8 @@ import torch.nn.functional as F
 from datasets import Dataset
 from transformers import GPTNeoXForCausalLM, LlamaForCausalLM, PreTrainedModel
 
-from ..concept_eraser import ErasureMethod
 from ..concept_scrubber import ConceptScrubber
+from ..leace import ErasureMethod
 from .llama import patch_attention_llama_, scrub_llama
 from .neox import patch_attention_neox_, scrub_neox
 

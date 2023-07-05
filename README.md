@@ -11,18 +11,21 @@ pip install concept-erasure
 
 # Usage
 
-`ConceptEraser` is the central class in this repo. It keeps track of the covariance and cross-covariance statistics needed to erase a concept, and lazily computes the LEACE parameters when needed.
+The two main classes in this repo are `LeaceFitter` and `LeaceEraser`.
+
+- `LeaceFitter` keeps track of the covariance and cross-covariance statistics needed to compute the LEACE erasure function. These statistics can be updated in an incremental fashion with `LeaceFitter.update()`. The erasure function is lazily computed when the `.eraser` property is accessed. This class uses O(_d<sup>2</sup>_) memory, where _d_ is the dimensionality of the representation, so you may want to discard it after computing the erasure function.
+- `LeaceEraser` is a compact representation of the LEACE erasure function, using only O(_dk_) memory, where _k_ is the number of classes in the concept you're trying to erase (or equivalently, the _dimensionality_ of the concept if it's not categorical).
 
 ## Batch usage
 
-In most cases, you probably have a batch of feature vectors `X` and concept labels `Z` and want to erase the concept from `X`. The easiest way to do this is using `ConceptEraser.fit()` followed by `ConceptEraser.forward()`:
+In most cases, you probably have a batch of feature vectors `X` and concept labels `Z` and want to erase the concept from `X`. The easiest way to do this is by using the `LeaceEraser.fit()` convenience method:
 
 ```python
 import torch
 from sklearn.datasets import make_classification
 from sklearn.linear_model import LogisticRegression
 
-from concept_erasure import ConceptEraser
+from concept_erasure import LeaceEraser
 
 n, d, k = 2048, 128, 2
 
@@ -40,7 +43,7 @@ real_lr = LogisticRegression(max_iter=1000).fit(X, Y)
 beta = torch.from_numpy(real_lr.coef_)
 assert beta.norm(p=torch.inf) > 0.1
 
-eraser = ConceptEraser.fit(X_t, Y_t)
+eraser = LeaceEraser.fit(X_t, Y_t)
 X_ = eraser(X_t)
 
 # But learns nothing after
@@ -50,10 +53,10 @@ assert beta.norm(p=torch.inf) < 1e-4
 ```
 
 ## Streaming usage
-If you have a **stream** of data, you can use `ConceptEraser.update()` to update the statistics and `ConceptEraser.forward()` to erase the concept. This is useful if you have a large dataset and want to avoid storing it all in memory.
+If you have a **stream** of data, you can use `LeaceFitter.update()` to update the statistics. This is useful if you have a large dataset and want to avoid storing it all in memory.
 
 ```python
-from concept_erasure import ConceptEraser
+from concept_erasure import LeaceFitter
 from sklearn.datasets import make_classification
 import torch
 
@@ -68,14 +71,14 @@ X, Y = make_classification(
 X_t = torch.from_numpy(X)
 Y_t = torch.from_numpy(Y)
 
-eraser = ConceptEraser(d, 1, dtype=X_t.dtype)
+fitter = LeaceFitter(d, 1, dtype=X_t.dtype)
 
 # Compute cross-covariance matrix using batched updates
 for x, y in zip(X_t.chunk(2), Y_t.chunk(2)):
-    eraser.update(x, y)
+    fitter.update(x, y)
 
 # Erase the concept from the data
-x_ = eraser(X_t[0])
+x_ = fitter.eraser(X_t[0])
 ```
 
 # Paper replication

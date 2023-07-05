@@ -1,4 +1,4 @@
-from itertools import product
+from itertools import pairwise, product
 
 import pytest
 import torch
@@ -7,7 +7,7 @@ from sklearn.datasets import make_classification
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import LinearSVC
 
-from concept_erasure import ConceptEraser, optimal_linear_shrinkage
+from concept_erasure import ErasureMethod, LeaceFitter, optimal_linear_shrinkage
 
 
 @pytest.mark.parametrize("shrinkage", [False, True])
@@ -18,7 +18,7 @@ def test_stats(shrinkage: bool):
     num_features = 3
     N = batch_size * num_batches
 
-    eraser = ConceptEraser(num_features, num_classes, shrinkage=shrinkage)
+    fitter = LeaceFitter(num_features, num_classes, shrinkage=shrinkage)
 
     # Generate random data
     torch.manual_seed(42)
@@ -27,10 +27,16 @@ def test_stats(shrinkage: bool):
         torch.randint(0, num_classes, (batch_size, num_classes))
         for _ in range(num_batches)
     ]
+    projections = []
 
     # Compute cross-covariance matrix using batched updates
     for x, y in zip(x_data, y_data):
-        eraser.update(x, y)
+        fitter.update(x, y)
+        projections.append(fitter.eraser.P)
+
+    # Make sure the cached eraser is getting invalidated on update() correctly
+    for p1, p2 in pairwise(projections):
+        assert not torch.allclose(p1, p2)
 
     # Compute the expected cross-covariance matrix using the whole dataset
     x_all = torch.cat(x_data)
@@ -51,8 +57,8 @@ def test_stats(shrinkage: bool):
     expected_sigma_xz = torch.einsum("b...m,b...n->...mn", x_centered, y_centered)
     expected_sigma_xz /= N - 1
 
-    torch.testing.assert_close(eraser.sigma_xx, expected_cov)
-    torch.testing.assert_close(eraser.sigma_xz, expected_sigma_xz)
+    torch.testing.assert_close(fitter.sigma_xx, expected_cov)
+    torch.testing.assert_close(fitter.sigma_xz, expected_sigma_xz)
 
 
 # Both `1` and `2` are binary classification problems, but `1` means the labels are
@@ -78,15 +84,23 @@ def test_projection(num_classes: int):
         Y_1h = Y_t
 
     bools = [False, True]
+    methods: list[ErasureMethod] = ["leace", "orth"]
     eps = 2e-9
-    for affine, method, shrink in product(bools, ["leace", "orth"], bools):
+    for affine, method, shrink in product(bools, methods, bools):
         # Shrinkage not applicable to orthogonal projection
         if method == "orth" and shrink:
             continue
 
-        eraser = ConceptEraser.fit(
-            X_t, Y_1h, affine=affine, method=method, shrinkage=shrink
-        )
+        fitter = LeaceFitter(
+            d,
+            num_classes,
+            affine=affine,
+            dtype=X_t.dtype,
+            method=method,
+            shrinkage=shrink,
+        ).update(X_t, Y_1h)
+
+        eraser = fitter.eraser
         X_ = eraser(X_t)
 
         # Check first-order optimality condition. To account for the nullspace
@@ -98,7 +112,7 @@ def test_projection(num_classes: int):
         # See "A matrix representation formula for a nonzero projection operator" in
         # https://en.wikipedia.org/wiki/Projection_(linear_algebra)
         P = A @ torch.inverse(B.T @ A) @ B.T
-        x_ = (X_t - eraser.mean_x) @ P.T + eraser.mean_x if affine else X_t @ P.T
+        x_ = (X_t - fitter.mean_x) @ P.T + fitter.mean_x if affine else X_t @ P.T
 
         # Define a random positive definite inner product
         L = torch.randn(d, d, dtype=X_t.dtype) / d**0.5
