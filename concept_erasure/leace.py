@@ -12,7 +12,12 @@ ErasureMethod = Literal["leace", "orth"]
 
 @dataclass(frozen=True)
 class LeaceEraser:
-    """Compact LEACE eraser that surgically erases a concept from a representation."""
+    """LEACE eraser that surgically erases a concept from a representation.
+
+    Since the LEACE projection matrix is guaranteed to be a rank k - 1 perturbation of
+    the identity, we store it implicitly in the d x k matrices `proj_left` and
+    `proj_right`. The full matrix is given by `torch.eye(d) - proj_left @ proj_right`.
+    """
 
     proj_left: Tensor
     proj_right: Tensor
@@ -43,18 +48,14 @@ class LeaceEraser:
 
 
 class LeaceFitter:
-    """Fits a LEACE eraser that surgically erases a concept from a representation.
+    """Fits an affine transform that surgically erases a concept from a representation.
 
     This class implements Least-squares Concept Erasure (LEACE) from
     https://arxiv.org/abs/2306.03819. You can also use a slightly simpler orthogonal
     projection-based method by setting `method="orth"`.
 
-    This class stores the covariance statistics needed to compute the LEACE eraser.
-    This allows the statistics to be updated incrementally.
-
-    Since the LEACE projection matrix is guaranteed to be a rank k - 1 perturbation of
-    the identity, we store it implicitly in the d x k matrices `proj_left` and
-    `proj_right`. The full matrix is given by `torch.eye(d) - proj_left @ proj_right`.
+    This class stores all the covariance statistics needed to compute the LEACE eraser.
+    This allows the statistics to be updated incrementally with `update()`.
     """
 
     mean_x: Tensor
@@ -134,7 +135,6 @@ class LeaceFitter:
 
         self.n = torch.tensor(0, device=device, dtype=dtype)
         self.sigma_xz_ = torch.zeros(x_dim, z_dim, device=device, dtype=dtype)
-        # self.sigma_zz_ = torch.zeros(z_dim, z_dim, device=device, dtype=dtype)
 
         if self.method == "leace":
             self.sigma_xx_ = torch.zeros(x_dim, x_dim, device=device, dtype=dtype)
