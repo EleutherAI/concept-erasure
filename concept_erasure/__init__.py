@@ -1,6 +1,7 @@
 from .concept_scrubber import ConceptScrubber
 from .data import chunk_and_tokenize
 from .leace import ErasureMethod, LeaceEraser, LeaceFitter
+from .oracle import OracleEraser, OracleFitter
 from .random_scrub import random_scrub
 from .shrinkage import optimal_linear_shrinkage
 from .utils import assert_type, chunk
@@ -14,5 +15,7 @@ __all__ = [
     "ConceptScrubber",
     "LeaceEraser",
     "LeaceFitter",
+    "OracleEraser",
+    "OracleFitter",
     "ErasureMethod",
 ]
