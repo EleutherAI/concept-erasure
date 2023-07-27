@@ -38,8 +38,12 @@ def optimal_linear_shrinkage(S_n: Tensor, n: int | Tensor) -> Tensor:
     top = trace_S.pow(2) * sigma0_norm_sq / n
     bottom = S_norm_sq * sigma0_norm_sq - prod_trace**2
 
-    alpha = 1 - top / bottom
-    beta = (1 - alpha) * prod_trace / sigma0_norm_sq
+    # Epsilon prevents dividing by zero for the zero matrix. In that case we end up
+    # setting alpha = 0, beta = 1, but it doesn't matter since we're shrinking toward
+    # tr(0)*I = 0, so it's a no-op.
+    eps = torch.finfo(S_n.dtype).eps
+    alpha = 1 - (top + eps) / (bottom + eps)
+    beta = (1 - alpha) * (prod_trace + eps) / (sigma0_norm_sq + eps)
 
     return alpha * S_n + beta * sigma0
 
