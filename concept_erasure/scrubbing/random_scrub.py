@@ -1,21 +1,22 @@
 from contextlib import contextmanager
 from functools import partial
+from typing import TYPE_CHECKING
 
 import torch
 from torch import Tensor, nn
-from transformers import PreTrainedModel
 
-from .utils import assert_type, is_norm_layer
+if (
+    TYPE_CHECKING
+):  # Don't import this unless we're type checking, since it's slow to import
+    from transformers import PreTrainedModel
+
+from ..utils import is_norm_layer
 
 
 @contextmanager
-def random_scrub(model: PreTrainedModel, subspace_dim: int):
+def random_scrub(model: "PreTrainedModel", subspace_dim: int):
     """Add hooks to the model which erase a random subspace during `forward`."""
     d = model.config.hidden_size
-
-    # Unwrap the base model if necessary
-    if isinstance(model, PreTrainedModel):
-        model = assert_type(PreTrainedModel, model.base_model)
 
     u = torch.empty(d, subspace_dim, device=model.device, dtype=model.dtype)
     nn.init.orthogonal_(u)

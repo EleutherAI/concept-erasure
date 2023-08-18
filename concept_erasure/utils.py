@@ -1,8 +1,6 @@
-import math
 from typing import Any, Type, TypeVar, cast
 
 from torch import nn
-from transformers import PreTrainedModel
 
 T = TypeVar("T")
 
@@ -13,28 +11,6 @@ def assert_type(typ: Type[T], obj: Any) -> T:
         raise TypeError(f"Expected {typ.__name__}, got {type(obj).__name__}")
 
     return cast(typ, obj)
-
-
-def chunk(seq: list[T], chunk_size: int) -> list[list[T]]:
-    """Chunk a sequence into chunks of size `chunk_size`."""
-
-    # Why the hell is this not in the standard library?
-    return [
-        seq[i * chunk_size : (i + 1) * chunk_size]
-        for i in range(math.ceil(len(seq) / chunk_size))
-    ]
-
-
-def get_transformer_layers(model: PreTrainedModel) -> nn.ModuleList:
-    """Return the `nn.ModuleList` containing the transformer layers in a model."""
-    assert not model.config.is_encoder_decoder, "Encoder-decoder models not supported"
-
-    lists = [mod for mod in model.modules() if isinstance(mod, nn.ModuleList)]
-    if not lists:
-        raise ValueError("Could not find transformer layers")
-
-    # Return the module list with the most parameters
-    return max(lists, key=lambda mod: sum(p.numel() for p in mod.parameters()))
 
 
 def is_norm_layer(module: nn.Module) -> bool:
