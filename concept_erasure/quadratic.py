@@ -4,7 +4,8 @@ import torch
 from torch import Tensor
 
 from .caching import cached_property, invalidates_cache
-from .optimal_transport import ot_barycenter, ot_map
+from .groupby import groupby
+from .optimal_transport import ot_barycenter, ot_map, ot_midpoint
 from .shrinkage import optimal_linear_shrinkage
 
 
@@ -24,12 +25,15 @@ class QuadraticEraser:
         """Convenience method to fit an QuadraticEraser on data and return it."""
         return QuadraticFitter.fit(x, z, **kwargs).eraser
 
-    def __call__(self, x: Tensor, z: int) -> Tensor:
-        """Replace `x` with the OLS residual given `z`."""
-
-        # Subtract E[X | Z = z] for each (x, z) and add E[X]
-        # x = x.index_add(0, z, self.ot_biases)
+    def optimal_transport(self, z: int, x: Tensor) -> Tensor:
+        """Transport `x` to the barycenter, assuming it was sampled from class `z`"""
         return (x - self.class_means[z]) @ self.ot_maps[z].mT + self.global_mean
+
+    def __call__(self, x: Tensor, z: Tensor) -> Tensor:
+        """Apply erasure to `x` with oracle labels `z`."""
+
+        # Efficiently group `x` by `z`, optimally transport each group, then coalesce
+        return groupby(x, z).map(self.optimal_transport).coalesce()
 
 
 class QuadraticFitter:
@@ -54,12 +58,10 @@ class QuadraticFitter:
     @classmethod
     def fit(cls, x: Tensor, z: Tensor, **kwargs) -> "QuadraticFitter":
         """Convenience method to fit a OracleFitter on data and return it."""
-        n, d = x.shape
-        _, k = z.reshape(n, -1).shape
+        d = x.shape[-1]
+        k = int(z.max()) + 1  # Number of classes
 
         fitter = QuadraticFitter(d, k, device=x.device, dtype=x.dtype, **kwargs)
-
-        # TODO: Split up the data into chunks, each with a different concept label
         return fitter.update(x, z)
 
     def __init__(
@@ -69,7 +71,7 @@ class QuadraticFitter:
         *,
         device: str | torch.device | None = None,
         dtype: torch.dtype | None = None,
-        shrinkage: bool = False,
+        shrinkage: bool = True,
     ):
         """Initialize a `QuadraticFitter`.
 
@@ -92,10 +94,20 @@ class QuadraticFitter:
             num_classes, x_dim, x_dim, device=device, dtype=dtype
         )
 
+    def update(self, x: Tensor, z: Tensor) -> "QuadraticFitter":
+        """Update the running statistics with a new batch of data."""
+        _, d = x.shape
+        x = x.reshape(-1, d).type_as(self.mean_x)
+
+        for label, group in groupby(x, z, dim=0):
+            self.update_single(group, label)
+
+        return self
+
     @torch.no_grad()
     @invalidates_cache("eraser")
-    def update(self, x: Tensor, z: int) -> "QuadraticFitter":
-        """Update the running statistics with a new batch of data."""
+    def update_single(self, x: Tensor, z: int) -> "QuadraticFitter":
+        """Update the running statistics with `x`, all sampled from class `z`."""
         _, d = x.shape
         x = x.reshape(-1, d).type_as(self.mean_x)
 
@@ -113,19 +125,25 @@ class QuadraticFitter:
     @cached_property
     def eraser(self) -> QuadraticEraser:
         """Erasure function lazily computed given the current statistics."""
-        assert torch.all(self.n > 1), "Some classes have < 2 samples"
 
-        # Compute Wasserstein barycenter of the classes, then compute the optimal
-        # transport maps from each class to the barycenter
-        center = ot_barycenter(self.sigma_xx, self.n)
+        # Compute Wasserstein barycenter of the classes
+        if self.num_classes == 2:
+            # Use closed form solution for the binary case
+            sigmas = self.sigma_xx
+            weights = self.n / self.n.sum()
+            center = ot_midpoint(sigmas[0], sigmas[1], *weights.tolist())
+        else:
+            # Use fixed point iteration for the general case
+            center = ot_barycenter(self.sigma_xx, self.n)
+
+        # Then compute the optimal ransport maps from each class to the barycenter
         ot_maps = ot_map(self.sigma_xx, center)
-
         return QuadraticEraser(self.mean_x, self.mean_x.mean(dim=0), ot_maps)
 
     @property
     def sigma_xx(self) -> Tensor:
         """Class-conditional covariance matrices of X."""
-        assert self.n > 1, "Call update() before accessing sigma_xx"
+        assert torch.all(self.n > 1), "Some classes have < 2 samples"
         assert (
             self.sigma_xx_ is not None
         ), "Covariance statistics are not being tracked for X"
@@ -134,9 +152,10 @@ class QuadraticFitter:
         S_hat = (self.sigma_xx_ + self.sigma_xx_.mT) / 2
 
         # Apply Random Matrix Theory-based shrinkage
+        n = self.n.view(-1, 1, 1)
         if self.shrinkage:
-            return optimal_linear_shrinkage(S_hat / self.n, self.n)
+            return optimal_linear_shrinkage(S_hat / n, n)
 
         # Just apply Bessel's correction
         else:
-            return S_hat / (self.n - 1)
+            return S_hat / (n - 1)

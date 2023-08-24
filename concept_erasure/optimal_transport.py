@@ -17,12 +17,20 @@ def psd_sqrt(A: Tensor) -> Tensor:
     return U * L.sqrt() @ U.mT
 
 
-@torch.jit.script
 def psd_sqrt_rsqrt(A: Tensor) -> tuple[Tensor, Tensor]:
-    """Efficiently compute both the p.s.d. sqrt & inverse sqrt of p.s.d. matrix `A`."""
+    """Efficiently compute both the p.s.d. sqrt & pinv sqrt of p.s.d. matrix `A`."""
     L, U = torch.linalg.eigh(A)
     L = L[..., None, :].clamp_min(0.0)
-    return U * L.sqrt() @ U.mT, U * L.rsqrt() @ U.mT
+
+    # Square root is easy
+    sqrt = U * L.sqrt() @ U.mT
+
+    # We actually compute the pseudo-inverse here for numerical stability.
+    # Use the same heuristic as `torch.linalg.pinv` to determine the tolerance.
+    thresh = L[..., None, -1] * A.shape[-1] * torch.finfo(A.dtype).eps
+    rsqrt = U * L.rsqrt().where(L > thresh, 0.0) @ U.mT
+
+    return sqrt, rsqrt
 
 
 def ot_barycenter(

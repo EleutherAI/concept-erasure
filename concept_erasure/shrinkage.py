@@ -24,7 +24,7 @@ def optimal_linear_shrinkage(S_n: Tensor, n: int | Tensor) -> Tensor:
         n: Sample size.
     """
     p = S_n.shape[-1]
-    assert n > 1 and S_n.shape[-2:] == (p, p)
+    assert S_n.shape[-2:] == (p, p)
 
     # TODO: Make this configurable, try using diag(S_n) or something
     eye = torch.eye(p, dtype=S_n.dtype, device=S_n.device).expand_as(S_n)
