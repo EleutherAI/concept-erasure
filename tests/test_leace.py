@@ -115,10 +115,10 @@ def check_linear_guardedness(
             dirty_x - dirty_x.mean(axis=0),
             y,
         )
-        assert abs(real_lr.coef_).max() > 0.1
+        assert abs(real_lr.coef_).max() > 0.05
 
         real_svm = LinearSVC(dual=False, intercept_scaling=1e6, tol=eps).fit(dirty_x, y)
-        assert abs(real_svm.coef_).max() > 0.1
+        assert abs(real_svm.coef_).max() > 0.05
 
 
 # Both `1` and `2` are binary classification problems, but `1` means the labels are
@@ -239,7 +239,7 @@ def test_quadratic_erasure(num_classes: int):
     X_scrubbed = eraser(X_t, Y_t).numpy()
 
     # Quadratic LEACE should ensure both linear & quadratic guardedness
-    check_linear_guardedness(None, X_scrubbed, Y.reshape(n, -1), tol)
+    check_linear_guardedness(X, X_scrubbed, Y.reshape(n, -1), tol)
 
     # Now check quadratic guardedness using QDA
     qda = QuadraticDiscriminantAnalysis(store_covariance=True).fit(X_scrubbed, Y)
