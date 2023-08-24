@@ -11,18 +11,20 @@ from .shrinkage import optimal_linear_shrinkage
 
 @dataclass(frozen=True)
 class QuadraticEraser:
-    """Surgically erases a concept from a representation, given concept labels."""
+    """Performs surgical quadratic concept erasure given oracle concept labels."""
 
     class_means: Tensor
+    """`[k, d]` batch of class centroids."""
 
     global_mean: Tensor
+    """`[d]` global centroid of the dataset."""
 
     ot_maps: Tensor
     """`[k, d, d]` batch of optimal transport matrices to the concept barycenter."""
 
     @classmethod
     def fit(cls, x: Tensor, z: Tensor, **kwargs) -> "QuadraticEraser":
-        """Convenience method to fit an QuadraticEraser on data and return it."""
+        """Convenience method to fit a QuadraticEraser on data and return it."""
         return QuadraticFitter.fit(x, z, **kwargs).eraser
 
     def optimal_transport(self, z: int, x: Tensor) -> Tensor:
@@ -37,11 +39,7 @@ class QuadraticEraser:
 
 
 class QuadraticFitter:
-    """Compute stats needed for surgically erasing a concept Z from a random vector X.
-
-    Unlike `LeaceFitter`, the resulting erasure function requires oracle concept labels
-    at inference time. In exchange, it achieves more surgical edits.
-    """
+    """Compute barycenter & optimal transport maps for a quadratic concept eraser."""
 
     mean_x: Tensor
     """Running mean of X."""
@@ -77,8 +75,7 @@ class QuadraticFitter:
 
         Args:
             x_dim: Dimensionality of the representation.
-            z_dim: Dimensionality of the concept.
-            method: Type of projection matrix to use.
+            num_classes: Number of distinct classes in the dataset.
             device: Device to put the statistics on.
             dtype: Data type to use for the statistics.
             shrinkage: Whether to use shrinkage to estimate the covariance matrix of X.
@@ -96,8 +93,7 @@ class QuadraticFitter:
 
     def update(self, x: Tensor, z: Tensor) -> "QuadraticFitter":
         """Update the running statistics with a new batch of data."""
-        _, d = x.shape
-        x = x.reshape(-1, d).type_as(self.mean_x)
+        x = x.flatten(0, -2).type_as(self.mean_x)
 
         for label, group in groupby(x, z, dim=0):
             self.update_single(group, label)
@@ -108,8 +104,7 @@ class QuadraticFitter:
     @invalidates_cache("eraser")
     def update_single(self, x: Tensor, z: int) -> "QuadraticFitter":
         """Update the running statistics with `x`, all sampled from class `z`."""
-        _, d = x.shape
-        x = x.reshape(-1, d).type_as(self.mean_x)
+        x = x.flatten(0, -2).type_as(self.mean_x)
 
         self.n[z] += len(x)
 

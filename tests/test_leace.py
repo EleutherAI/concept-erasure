@@ -244,8 +244,13 @@ def test_quadratic_erasure(num_classes: int):
     # Now check quadratic guardedness using QDA
     qda = QuadraticDiscriminantAnalysis(store_covariance=True).fit(X_scrubbed, Y)
     loss = log_loss(Y, qda.predict_proba(X_scrubbed))
-    trival_loss = log_loss(Y, np.tile(qda.priors_, [n, 1]))
-    np.testing.assert_allclose(loss, trival_loss)
+    trivial_loss = log_loss(Y, np.tile(qda.priors_, [n, 1]))
+    np.testing.assert_allclose(loss, trivial_loss)
+
+    # Sanity check that it DOES learn something before erasure
+    real_qda = QuadraticDiscriminantAnalysis(store_covariance=True).fit(X, Y)
+    real_loss = log_loss(Y, real_qda.predict_proba(X))
+    assert real_loss < trivial_loss
 
     # Check that the covariance matrices and means are all the same
     cov, mu = qda.covariance_, np.asarray(qda.means_)
