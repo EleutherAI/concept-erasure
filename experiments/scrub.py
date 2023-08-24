@@ -12,8 +12,7 @@ from transformers import (
     PreTrainedTokenizerBase,
 )
 
-from concept_erasure import random_scrub
-from concept_erasure.scrubbing import patch_attention_, scrub
+from concept_erasure.scrubbing import patch_attention_, random_scrub, scrub
 from concept_erasure.utils import assert_type
 
 
@@ -95,12 +94,13 @@ if __name__ == "__main__":
                 desc="Evaluating",
                 total=len(ds) // args.batch_size,
             )
+            base = assert_type(PreTrainedModel, model.base_model)
 
             for batch in pbar:
                 assert isinstance(batch, dict)
 
                 tokens = assert_type(torch.Tensor, batch["input_ids"])
-                with random_scrub(model, subspace_dim=k):
+                with random_scrub(base, subspace_dim=k):
                     loss = model(tokens, labels=tokens).loss
                     losses.append(loss)
 

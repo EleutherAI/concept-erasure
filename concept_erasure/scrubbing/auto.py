@@ -37,7 +37,7 @@ def scrub(
     method: ErasureMethod = "leace",
     sublayers: bool = True,
 ) -> tuple[ConceptScrubber | None, float]:
-    """Scrub a model to remove the fast attention kernels."""
+    """Apply concept scrubbing to `model` on dataset `train`, returning the scrubber."""
     if isinstance(model, GPTNeoXForCausalLM):
         return scrub_neox(model, train, z_column, batch_size, method, affine)
     elif isinstance(model, LlamaForCausalLM):

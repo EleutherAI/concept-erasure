@@ -3,7 +3,6 @@ from functools import partial
 from typing import Callable
 
 from torch import Tensor, nn
-from transformers import PreTrainedModel
 
 from .leace import LeaceEraser
 from .utils import assert_type, is_norm_layer, mangle_module_path
@@ -46,7 +45,10 @@ class ConceptScrubber:
             key = mangle_module_path(name)
             return hook_fn(key, x), *extras
 
-        # Unwrap the base model if necessary
+        # Unwrap the base model if necessary. This is needed to ensure we don't try to
+        # scrub right before the unembedding layer
+        from transformers import PreTrainedModel
+
         if isinstance(model, PreTrainedModel):
             model = assert_type(PreTrainedModel, model.base_model)
 
