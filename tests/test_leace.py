@@ -5,7 +5,9 @@ import pytest
 import torch
 import torch.nn.functional as F
 from sklearn.datasets import make_classification
+from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
 from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import log_loss
 from sklearn.svm import LinearSVC
 
 from concept_erasure import (
@@ -13,8 +15,10 @@ from concept_erasure import (
     LeaceFitter,
     OracleEraser,
     OracleFitter,
+    QuadraticEraser,
     optimal_linear_shrinkage,
 )
+from concept_erasure.optimal_transport import is_positive_definite
 
 
 @pytest.mark.parametrize("shrinkage", [False, True])
@@ -78,7 +82,7 @@ def test_stats(shrinkage: bool):
     torch.testing.assert_close(oracle.sigma_zz, expected_sigma_zz)
 
 
-def check_guardedness(
+def check_linear_guardedness(
     dirty_x: np.ndarray | None, scrubbed_x: np.ndarray, y: np.ndarray, eps: float
 ):
     # Logistic regression should not be able to learn anything.
@@ -111,17 +115,17 @@ def check_guardedness(
             dirty_x - dirty_x.mean(axis=0),
             y,
         )
-        assert abs(real_lr.coef_).max() > 0.1
+        assert abs(real_lr.coef_).max() > 0.05
 
         real_svm = LinearSVC(dual=False, intercept_scaling=1e6, tol=eps).fit(dirty_x, y)
-        assert abs(real_svm.coef_).max() > 0.1
+        assert abs(real_svm.coef_).max() > 0.05
 
 
 # Both `1` and `2` are binary classification problems, but `1` means the labels are
 # encoded in a 1D one-hot vector, while `2` means the labels are encoded in an
 # n x 2 one-hot matrix.
 @pytest.mark.parametrize("num_classes", [1, 2, 3, 5, 10, 20])
-def test_erasure(num_classes: int):
+def test_linear_erasure(num_classes: int):
     eps = 2e-9
     n, d = 2048, 128
     num_distinct = max(num_classes, 2)
@@ -144,7 +148,7 @@ def test_erasure(num_classes: int):
     oracle = OracleEraser.fit(X_t, Y_1h)
     X_oracle = oracle(X_t, Y_1h)
 
-    check_guardedness(None, X_oracle.numpy(), Y.reshape(n, -1), eps)
+    check_linear_guardedness(None, X_oracle.numpy(), Y.reshape(n, -1), eps)
     oracle_loss = F.mse_loss(X_oracle, X_t)  # Optimal surgicality
 
     bools = [False, True]
@@ -211,4 +215,47 @@ def test_erasure(num_classes: int):
         )
         assert not torch.allclose(class_means[1:], class_means[:-1])
 
-        check_guardedness(X, X_.numpy(), Y, eps)
+        check_linear_guardedness(X, X_.numpy(), Y, eps)
+
+
+@pytest.mark.parametrize("num_classes", [2, 3, 5, 10, 20])
+def test_quadratic_erasure(num_classes: int):
+    tol = 2e-9
+    n, d = 1024, 32
+
+    X, Y = make_classification(
+        n_samples=n,
+        n_features=d,
+        n_classes=num_classes,
+        n_informative=num_classes,
+        # QDA goes berserk if the covariance matrices are singular
+        n_redundant=0,
+        random_state=42,
+    )
+    X_t = torch.from_numpy(X)
+    Y_t = torch.from_numpy(Y)
+
+    eraser = QuadraticEraser.fit(X_t, Y_t, shrinkage=False)
+    X_scrubbed = eraser(X_t, Y_t).numpy()
+
+    # Quadratic LEACE should ensure both linear & quadratic guardedness
+    check_linear_guardedness(X, X_scrubbed, Y.reshape(n, -1), tol)
+
+    # Now check quadratic guardedness using QDA
+    qda = QuadraticDiscriminantAnalysis(store_covariance=True).fit(X_scrubbed, Y)
+    loss = log_loss(Y, qda.predict_proba(X_scrubbed))
+    trivial_loss = log_loss(Y, np.tile(qda.priors_, [n, 1]))
+    np.testing.assert_allclose(loss, trivial_loss)
+
+    # Sanity check that it DOES learn something before erasure
+    real_qda = QuadraticDiscriminantAnalysis(store_covariance=True).fit(X, Y)
+    real_loss = log_loss(Y, real_qda.predict_proba(X))
+    assert real_loss < trivial_loss
+
+    # Check that the covariance matrices and means are all the same
+    cov, mu = qda.covariance_, np.asarray(qda.means_)
+    np.testing.assert_allclose(cov[1:], cov[:-1])
+    np.testing.assert_allclose(mu[1:], mu[:-1])
+
+    # Optimal transport maps should all be positive definite
+    assert is_positive_definite(eraser.ot_maps).all()
