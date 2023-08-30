@@ -5,7 +5,7 @@ import torch
 from torch import Tensor
 
 from .caching import cached_property, invalidates_cache
-from .shrinkage import optimal_linear_shrinkage
+from .online_stats import OnlineStats
 
 ErasureMethod = Literal["leace", "orth"]
 
@@ -47,7 +47,7 @@ class LeaceEraser:
         return x_.type_as(x)
 
 
-class LeaceFitter:
+class LeaceFitter(OnlineStats):
     """Fits an affine transform that surgically erases a concept from a representation.
 
     This class implements Least-squares Concept Erasure (LEACE) from
@@ -58,20 +58,8 @@ class LeaceFitter:
     This allows the statistics to be updated incrementally with `update()`.
     """
 
-    mean_x: Tensor
-    """Running mean of X."""
-
-    mean_z: Tensor
-    """Running mean of Z."""
-
-    sigma_xz_: Tensor
-    """Unnormalized cross-covariance matrix X^T Z."""
-
-    sigma_xx_: Tensor | None
-    """Unnormalized covariance matrix X^T X."""
-
-    n: Tensor
-    """Number of X samples seen so far."""
+    stats: OnlineStats
+    """Online statistics for X and Z."""
 
     @classmethod
     def fit(cls, x: Tensor, z: Tensor, **kwargs) -> "LeaceFitter":
@@ -117,63 +105,25 @@ class LeaceFitter:
                 matrix. Higher values are more numerically stable and result in less
                 damage to the representation, but may leave trace correlations intact.
         """
-        super().__init__()
-
-        self.x_dim = x_dim
-        self.z_dim = z_dim
-
+        super().__init__(
+            x_dim,
+            z_dim,
+            device=device,
+            dtype=dtype,
+            shrinkage=shrinkage,
+            sigma_xx=method == "leace",
+        )
         self.affine = affine
         self.constrain_cov_trace = constrain_cov_trace
         self.method = method
-        self.shrinkage = shrinkage
 
         assert svd_tol > 0.0, "`svd_tol` must be positive for numerical stability."
         self.svd_tol = svd_tol
 
-        self.mean_x = torch.zeros(x_dim, device=device, dtype=dtype)
-        self.mean_z = torch.zeros(z_dim, device=device, dtype=dtype)
-
-        self.n = torch.tensor(0, device=device, dtype=dtype)
-        self.sigma_xz_ = torch.zeros(x_dim, z_dim, device=device, dtype=dtype)
-
-        if self.method == "leace":
-            self.sigma_xx_ = torch.zeros(x_dim, x_dim, device=device, dtype=dtype)
-        elif self.method == "orth":
-            self.sigma_xx_ = None
-        else:
-            raise ValueError(f"Unknown projection type {self.method}")
-
-    @torch.no_grad()
     @invalidates_cache("eraser")
     def update(self, x: Tensor, z: Tensor) -> "LeaceFitter":
         """Update the running statistics with a new batch of data."""
-        d, c = self.sigma_xz_.shape
-        x = x.reshape(-1, d).type_as(self.mean_x)
-        n, d2 = x.shape
-
-        assert d == d2, f"Unexpected number of features {d2}"
-        self.n += n
-
-        # Welford's online algorithm
-        delta_x = x - self.mean_x
-        self.mean_x += delta_x.sum(dim=0) / self.n
-        delta_x2 = x - self.mean_x
-
-        # Update the covariance matrix of X if needed (for LEACE)
-        if self.method == "leace":
-            assert self.sigma_xx_ is not None
-            self.sigma_xx_.addmm_(delta_x.mT, delta_x2)
-
-        z = z.reshape(n, -1).type_as(x)
-        assert z.shape[-1] == c, f"Unexpected number of classes {z.shape[-1]}"
-
-        delta_z = z - self.mean_z
-        self.mean_z += delta_z.sum(dim=0) / self.n
-        delta_z2 = z - self.mean_z
-
-        # Update the cross-covariance matrix
-        self.sigma_xz_.addmm_(delta_x.mT, delta_z2)
-
+        super().update(x, z)
         return self
 
     @cached_property
@@ -245,28 +195,3 @@ class LeaceFitter:
         return LeaceEraser(
             proj_left, proj_right, bias=self.mean_x if self.affine else None
         )
-
-    @property
-    def sigma_xx(self) -> Tensor:
-        """The covariance matrix of X."""
-        assert self.n > 1, "Call update() before accessing sigma_xx"
-        assert (
-            self.sigma_xx_ is not None
-        ), "Covariance statistics are not being tracked for X"
-
-        # Accumulated numerical error may cause this to be slightly non-symmetric
-        S_hat = (self.sigma_xx_ + self.sigma_xx_.mT) / 2
-
-        # Apply Random Matrix Theory-based shrinkage
-        if self.shrinkage:
-            return optimal_linear_shrinkage(S_hat / self.n, self.n)
-
-        # Just apply Bessel's correction
-        else:
-            return S_hat / (self.n - 1)
-
-    @property
-    def sigma_xz(self) -> Tensor:
-        """The cross-covariance matrix."""
-        assert self.n > 1, "Call update() with labels before accessing sigma_xz"
-        return self.sigma_xz_ / (self.n - 1)
