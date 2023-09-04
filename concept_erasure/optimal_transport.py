@@ -28,7 +28,7 @@ def psd_sqrt_rsqrt(A: Tensor) -> tuple[Tensor, Tensor]:
     # We actually compute the pseudo-inverse here for numerical stability.
     # Use the same heuristic as `torch.linalg.pinv` to determine the tolerance.
     thresh = L[..., None, -1] * A.shape[-1] * torch.finfo(A.dtype).eps
-    rsqrt = U * L.rsqrt().where(L > thresh, 0.0) @ U.mT
+    rsqrt = U * torch.where(L > thresh, L.rsqrt(), 0.0) @ U.mT
 
     return sqrt, rsqrt
 

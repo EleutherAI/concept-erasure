@@ -192,8 +192,8 @@ class LeaceFitter:
             # Assuming PSD; account for numerical error
             L.clamp_min_(0.0)
 
-            W = V * L.rsqrt().where(mask, 0.0) @ V.mT
-            W_inv = V * L.sqrt().where(mask, 0.0) @ V.mT
+            W = V * torch.where(mask, L.rsqrt(), 0.0) @ V.mT
+            W_inv = V * torch.where(mask, L.sqrt(), 0.0) @ V.mT
         else:
             W, W_inv = eye, eye
 
