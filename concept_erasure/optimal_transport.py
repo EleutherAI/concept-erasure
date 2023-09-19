@@ -14,7 +14,7 @@ def psd_sqrt(A: Tensor) -> Tensor:
     """Compute the unique p.s.d. square root of a positive semidefinite matrix."""
     L, U = torch.linalg.eigh(A)
     L = L[..., None, :].clamp_min(0.0)
-    return U * L.sqrt() @ U.mT
+    return U * L.sqrt() @ U.mH
 
 
 def psd_sqrt_rsqrt(A: Tensor) -> tuple[Tensor, Tensor]:
@@ -23,12 +23,12 @@ def psd_sqrt_rsqrt(A: Tensor) -> tuple[Tensor, Tensor]:
     L = L[..., None, :].clamp_min(0.0)
 
     # Square root is easy
-    sqrt = U * L.sqrt() @ U.mT
+    sqrt = U * L.sqrt() @ U.mH
 
     # We actually compute the pseudo-inverse here for numerical stability.
     # Use the same heuristic as `torch.linalg.pinv` to determine the tolerance.
     thresh = L[..., None, -1] * A.shape[-1] * torch.finfo(A.dtype).eps
-    rsqrt = U * torch.where(L > thresh, L.rsqrt(), 0.0) @ U.mT
+    rsqrt = U * torch.where(L > thresh, L.rsqrt(), 0.0) @ U.mH
 
     return sqrt, rsqrt
 
@@ -84,7 +84,7 @@ def ot_barycenter(
 
         # Equation 7 from Álvarez-Esteban et al. (2016)
         T = torch.sum(weights * rsqrt_mu @ inner @ rsqrt_mu, dim=0)
-        mu = T @ mu @ T.mT
+        mu = T @ mu @ T.mH
 
     return mu
 

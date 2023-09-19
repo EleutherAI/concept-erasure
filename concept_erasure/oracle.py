@@ -93,7 +93,7 @@ class OracleFitter:
         self.mean_x = torch.zeros(x_dim, device=device, dtype=dtype)
         self.mean_z = torch.zeros(z_dim, device=device, dtype=dtype)
 
-        self.n = torch.tensor(0, device=device, dtype=dtype)
+        self.n = torch.tensor(0, device=device)
         self.sigma_xz_ = torch.zeros(x_dim, z_dim, device=device, dtype=dtype)
         self.sigma_zz_ = torch.zeros(z_dim, z_dim, device=device, dtype=dtype)
 
@@ -119,8 +119,8 @@ class OracleFitter:
         self.mean_z += delta_z.sum(dim=0) / self.n
         delta_z2 = z - self.mean_z
 
-        self.sigma_xz_.addmm_(delta_x.mT, delta_z2)
-        self.sigma_zz_.addmm_(delta_z.mT, delta_z2)
+        self.sigma_xz_.addmm_(delta_x.mH, delta_z2)
+        self.sigma_zz_.addmm_(delta_z.mH, delta_z2)
 
         return self
 
@@ -141,7 +141,7 @@ class OracleFitter:
         ), "Covariance statistics are not being tracked for X"
 
         # Accumulated numerical error may cause this to be slightly non-symmetric
-        S_hat = (self.sigma_zz_ + self.sigma_zz_.mT) / 2
+        S_hat = (self.sigma_zz_ + self.sigma_zz_.mH) / 2
 
         # Apply Random Matrix Theory-based shrinkage
         if self.shrinkage:

@@ -102,6 +102,7 @@ def invert_indices(indices: Tensor) -> Tensor:
     reverse_indices = torch.empty_like(indices)
 
     # Scatter the indices to reverse the permutation
-    reverse_indices.scatter_(0, indices, torch.arange(len(indices)))
+    arange = torch.arange(len(indices), device=indices.device)
+    reverse_indices.scatter_(0, indices, arange)
 
     return reverse_indices
