@@ -2,7 +2,6 @@ from dataclasses import dataclass
 
 import torch
 from torch import Tensor
-from torch.distributions import MultivariateNormal
 
 from .caching import cached_property, invalidates_cache
 from .groupby import groupby
@@ -17,17 +16,11 @@ class QuadraticEraser:
     class_means: Tensor
     """`[k, d]` batch of class centroids."""
 
-    class_prior: Tensor
-    """`[k]` prior probability of each class."""
-
     global_mean: Tensor
     """`[d]` global centroid of the dataset."""
 
     ot_maps: Tensor
     """`[k, d, d]` batch of optimal transport matrices to the concept barycenter."""
-
-    scale_trils: Tensor | None = None
-    """`[k, d, d]` batch of covariance Cholesky factors for each class."""
 
     @classmethod
     def fit(cls, x: Tensor, z: Tensor, **kwargs) -> "QuadraticEraser":
@@ -36,33 +29,38 @@ class QuadraticEraser:
 
     def optimal_transport(self, z: int, x: Tensor) -> Tensor:
         """Transport `x` to the barycenter, assuming it was sampled from class `z`"""
-        return (x - self.class_means[z]) @ self.ot_maps[z].mT + self.global_mean
+        x_ = x.flatten(1)
+        x_ = (x_ - self.class_means[z]) @ self.ot_maps[z].mT + self.global_mean
+        return x_.view_as(x)
 
-    def predict(self, x: Tensor) -> Tensor:
-        """Compute the log posterior p(z|x) for each class z."""
-        assert self.scale_trils is not None, "Set store_covariance=True for prediction"
-
-        # Because we provide the Cholesky factor directly, the initialization is cheap
-        gaussian = MultivariateNormal(
-            loc=self.class_means, scale_tril=self.scale_trils, validate_args=False
-        )
-        # Bayes rule
-        log_prior = self.class_prior.log()
-        log_likelihood = gaussian.log_prob(x[:, None])
-        return torch.log_softmax(log_prior + log_likelihood, dim=-1)
-
-    def __call__(self, x: Tensor, z: Tensor | None = None) -> Tensor:
-        """Apply erasure to `x` with oracle labels `z`.
-
-        If `z` is not provided, we will estimate it from `x` using `self.predict`. This
-        is only possible if `store_covariance=True` was passed to `QuadraticFitter`.
-        """
-        if z is None:
-            assert self.scale_trils is not None, "Set store_covariance=True"
-            z = self.predict(x).argmax(-1)
-
+    def __call__(self, x: Tensor, z: Tensor) -> Tensor:
+        """Apply erasure to `x` with oracle labels `z`."""
         # Efficiently group `x` by `z`, optimally transport each group, then coalesce
         return groupby(x, z).map(self.optimal_transport).coalesce()
+
+
+@dataclass(frozen=True)
+class QuadraticEditor:
+    """Performs surgical quadratic concept editing."""
+
+    class_means: Tensor
+    """`[k, d]` batch of class centroids."""
+
+    ot_maps: Tensor
+    """`[k, k, d, d]` batch of pairwise optimal transport matrices between classes."""
+
+    def transport(self, x: Tensor, source_z: int, target_z: int) -> Tensor:
+        """Transport `x` from class `source_z` to class `target_z`"""
+        T = self.ot_maps[source_z, target_z]
+        return (x - self.class_means[source_z]) @ T.mT + self.class_means[target_z]
+
+    def __call__(self, x: Tensor, source_z: Tensor, target_z: int) -> Tensor:
+        """Transport `x` from classes `source_z` to class `target_z`."""
+        return (
+            groupby(x, source_z)
+            .map(lambda src, x_grp: self.transport(x_grp, src, target_z))
+            .coalesce()
+        )
 
 
 class QuadraticFitter:
@@ -96,7 +94,6 @@ class QuadraticFitter:
         *,
         device: str | torch.device | None = None,
         dtype: torch.dtype | None = None,
-        store_covariance: bool = False,
         shrinkage: bool = True,
     ):
         """Initialize a `QuadraticFitter`.
@@ -116,7 +113,6 @@ class QuadraticFitter:
 
         self.num_classes = num_classes
         self.shrinkage = shrinkage
-        self.store_covariance = store_covariance
 
         self.mean_x = torch.zeros(num_classes, x_dim, device=device, dtype=dtype)
         self.n = torch.zeros(num_classes, device=device, dtype=torch.long)
@@ -150,33 +146,33 @@ class QuadraticFitter:
 
         return self
 
+    def editor(self) -> QuadraticEditor:
+        """Quadratic editor for the concept."""
+        sigma = self.sigma_xx
+        return QuadraticEditor(self.mean_x, ot_map(sigma[:, None], sigma))
+
     @cached_property
     def eraser(self) -> QuadraticEraser:
         """Erasure function lazily computed given the current statistics."""
 
-        class_prior = self.n / self.n.sum()
         sigmas = self.sigma_xx
 
         # Compute Wasserstein barycenter of the classes
         if self.num_classes == 2:
             # Use closed form solution for the binary case
+            class_prior = self.n / self.n.sum()
             center = ot_midpoint(sigmas[0], sigmas[1], *class_prior.tolist())
         else:
             # Use fixed point iteration for the general case
             center = ot_barycenter(self.sigma_xx, self.n)
 
-        # Then compute the optimal ransport maps from each class to the barycenter
+        # Then compute the optimal transport maps from each class to the barycenter
         ot_maps = ot_map(sigmas, center)
 
-        if self.store_covariance:
-            # Add jitter to ensure positive-definiteness
-            torch.linalg.diagonal(sigmas).add_(1e-3)
-            scale_trils = torch.linalg.cholesky(sigmas)
-        else:
-            scale_trils = None
-
         return QuadraticEraser(
-            self.mean_x, class_prior, self.mean_x.mean(dim=0), ot_maps, scale_trils
+            self.mean_x,
+            self.mean_x.mean(dim=0),
+            ot_maps,
         )
 
     @property
