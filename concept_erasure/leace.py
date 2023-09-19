@@ -162,7 +162,7 @@ class LeaceFitter:
         # Update the covariance matrix of X if needed (for LEACE)
         if self.method == "leace":
             assert self.sigma_xx_ is not None
-            self.sigma_xx_.addmm_(delta_x.mT, delta_x2)
+            self.sigma_xx_.addmm_(delta_x.mH, delta_x2)
 
         z = z.reshape(n, -1).type_as(x)
         assert z.shape[-1] == c, f"Unexpected number of classes {z.shape[-1]}"
@@ -172,7 +172,7 @@ class LeaceFitter:
         delta_z2 = z - self.mean_z
 
         # Update the cross-covariance matrix
-        self.sigma_xz_.addmm_(delta_x.mT, delta_z2)
+        self.sigma_xz_.addmm_(delta_x.mH, delta_z2)
 
         return self
 
@@ -192,8 +192,8 @@ class LeaceFitter:
             # Assuming PSD; account for numerical error
             L.clamp_min_(0.0)
 
-            W = V * torch.where(mask, L.rsqrt(), 0.0) @ V.mT
-            W_inv = V * torch.where(mask, L.sqrt(), 0.0) @ V.mT
+            W = V * torch.where(mask, L.rsqrt(), 0.0) @ V.mH
+            W_inv = V * torch.where(mask, L.sqrt(), 0.0) @ V.mH
         else:
             W, W_inv = eye, eye
 
@@ -211,7 +211,7 @@ class LeaceFitter:
             # Prevent the covariance trace from increasing
             sigma = self.sigma_xx
             old_trace = torch.trace(sigma)
-            new_trace = torch.trace(P @ sigma @ P.mT)
+            new_trace = torch.trace(P @ sigma @ P.mH)
 
             # If applying the projection matrix increases the variance, this might
             # cause instability, especially when erasure is applied multiple times.
@@ -221,8 +221,8 @@ class LeaceFitter:
 
                 # Set up the variables for the quadratic equation
                 x = new_trace
-                y = 2 * torch.trace(P @ sigma @ Q.mT)
-                z = torch.trace(Q @ sigma @ Q.mT)
+                y = 2 * torch.trace(P @ sigma @ Q.mH)
+                z = torch.trace(Q @ sigma @ Q.mH)
                 w = old_trace
 
                 # Solve for the mixture of P and Q that makes the trace equal to the
@@ -255,7 +255,7 @@ class LeaceFitter:
         ), "Covariance statistics are not being tracked for X"
 
         # Accumulated numerical error may cause this to be slightly non-symmetric
-        S_hat = (self.sigma_xx_ + self.sigma_xx_.mT) / 2
+        S_hat = (self.sigma_xx_ + self.sigma_xx_.mH) / 2
 
         # Apply Random Matrix Theory-based shrinkage
         if self.shrinkage:

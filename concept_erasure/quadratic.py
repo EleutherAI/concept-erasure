@@ -30,7 +30,7 @@ class QuadraticEraser:
     def optimal_transport(self, z: int, x: Tensor) -> Tensor:
         """Transport `x` to the barycenter, assuming it was sampled from class `z`"""
         x_ = x.flatten(1)
-        x_ = (x_ - self.class_means[z]) @ self.ot_maps[z].mT + self.global_mean
+        x_ = (x_ - self.class_means[z]) @ self.ot_maps[z].mH + self.global_mean
         return x_.view_as(x)
 
     def __call__(self, x: Tensor, z: Tensor) -> Tensor:
@@ -52,7 +52,7 @@ class QuadraticEditor:
     def transport(self, x: Tensor, source_z: int, target_z: int) -> Tensor:
         """Transport `x` from class `source_z` to class `target_z`"""
         T = self.ot_maps[source_z, target_z]
-        return (x - self.class_means[source_z]) @ T.mT + self.class_means[target_z]
+        return (x - self.class_means[source_z]) @ T.mH + self.class_means[target_z]
 
     def __call__(self, x: Tensor, source_z: Tensor, target_z: int) -> Tensor:
         """Transport `x` from classes `source_z` to class `target_z`."""
@@ -142,7 +142,7 @@ class QuadraticFitter:
         self.mean_x[z] += delta_x.sum(dim=0) / self.n[z]
         delta_x2 = x - self.mean_x[z]
 
-        self.sigma_xx_[z].addmm_(delta_x.mT, delta_x2)
+        self.sigma_xx_[z].addmm_(delta_x.mH, delta_x2)
 
         return self
 
@@ -183,8 +183,8 @@ class QuadraticFitter:
             self.sigma_xx_ is not None
         ), "Covariance statistics are not being tracked for X"
 
-        # Accumulated numerical error may cause this to be slightly non-symmetric
-        S_hat = (self.sigma_xx_ + self.sigma_xx_.mT) / 2
+        # Accumulated numerical error may cause this to be slightly non-Hermitian
+        S_hat = (self.sigma_xx_ + self.sigma_xx_.mH) / 2
 
         # Apply Random Matrix Theory-based shrinkage
         n = self.n.view(-1, 1, 1)

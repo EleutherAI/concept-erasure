@@ -26,7 +26,7 @@ def test_olse_shrinkage(p: int, n: int):
 
     # Generate a random covariance matrix
     A = torch.randn(N, p, p)
-    S_true = A @ A.mT / p
+    S_true = A @ A.mH / p
     torch.linalg.diagonal(S_true).add_(1e-3)
 
     # Generate data with this covariance
@@ -37,7 +37,7 @@ def test_olse_shrinkage(p: int, n: int):
 
     # Compute the sample covariance matrix
     X_centered = X - X.mean(dim=0, keepdim=True)
-    S_hat = (X_centered.mT @ X_centered) / n
+    S_hat = (X_centered.mH @ X_centered) / n
 
     # Apply shrinkage
     S_olse = optimal_linear_shrinkage(S_hat, n)
