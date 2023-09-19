@@ -43,7 +43,7 @@ class LeaceEraser:
         delta = x - self.bias if self.bias is not None else x
 
         # Ensure we do the matmul in the most efficient order.
-        x_ = x - (delta @ self.proj_right.T) @ self.proj_left.T
+        x_ = x - (delta @ self.proj_right.mH) @ self.proj_left.mH
         return x_.type_as(x)
 
 
@@ -133,7 +133,7 @@ class LeaceFitter:
         self.mean_x = torch.zeros(x_dim, device=device, dtype=dtype)
         self.mean_z = torch.zeros(z_dim, device=device, dtype=dtype)
 
-        self.n = torch.tensor(0, device=device, dtype=dtype)
+        self.n = torch.tensor(0, device=device)
         self.sigma_xz_ = torch.zeros(x_dim, z_dim, device=device, dtype=dtype)
 
         if self.method == "leace":
@@ -203,7 +203,7 @@ class LeaceFitter:
         u *= s > self.svd_tol
 
         proj_left = W_inv @ u
-        proj_right = u.T @ W
+        proj_right = u.mH @ W
 
         if self.constrain_cov_trace and self.method == "leace":
             P = eye - proj_left @ proj_right
@@ -216,8 +216,8 @@ class LeaceFitter:
             # If applying the projection matrix increases the variance, this might
             # cause instability, especially when erasure is applied multiple times.
             # We regularize toward the orthogonal projection matrix to avoid this.
-            if new_trace > old_trace:
-                Q = eye - u @ u.T
+            if new_trace.real > old_trace.real:
+                Q = eye - u @ u.mH
 
                 # Set up the variables for the quadratic equation
                 x = new_trace
@@ -234,7 +234,7 @@ class LeaceFitter:
                 alpha2 = (-y / 2 + z + discr / 2) / (x - y + z)
 
                 # Choose the positive root
-                alpha = torch.where(alpha1 > 0, alpha1, alpha2).clamp(0, 1)
+                alpha = torch.where(alpha1.real > 0, alpha1, alpha2).clamp(0, 1)
                 P = alpha * P + (1 - alpha) * Q
 
                 # TODO: Avoid using SVD here

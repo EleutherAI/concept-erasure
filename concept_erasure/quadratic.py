@@ -115,7 +115,7 @@ class QuadraticFitter:
         self.shrinkage = shrinkage
 
         self.mean_x = torch.zeros(num_classes, x_dim, device=device, dtype=dtype)
-        self.n = torch.zeros(num_classes, device=device, dtype=torch.long)
+        self.n = torch.zeros(num_classes, device=device)
         self.sigma_xx_ = torch.zeros(
             num_classes, x_dim, x_dim, device=device, dtype=dtype
         )

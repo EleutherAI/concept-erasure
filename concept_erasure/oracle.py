@@ -93,7 +93,7 @@ class OracleFitter:
         self.mean_x = torch.zeros(x_dim, device=device, dtype=dtype)
         self.mean_z = torch.zeros(z_dim, device=device, dtype=dtype)
 
-        self.n = torch.tensor(0, device=device, dtype=dtype)
+        self.n = torch.tensor(0, device=device)
         self.sigma_xz_ = torch.zeros(x_dim, z_dim, device=device, dtype=dtype)
         self.sigma_zz_ = torch.zeros(z_dim, z_dim, device=device, dtype=dtype)
 

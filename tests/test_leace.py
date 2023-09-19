@@ -22,19 +22,22 @@ from concept_erasure.optimal_transport import is_positive_definite
 
 
 @pytest.mark.parametrize("shrinkage", [False, True])
-def test_stats(shrinkage: bool):
+@pytest.mark.parametrize("dtype", [torch.float64, torch.complex128])
+def test_stats(shrinkage: bool, dtype: torch.dtype):
     batch_size = 10
     num_batches = 5
     num_classes = 2
     num_features = 3
     N = batch_size * num_batches
 
-    fitter = LeaceFitter(num_features, num_classes, shrinkage=shrinkage)
-    oracle = OracleFitter(num_features, num_classes, shrinkage=shrinkage)
+    fitter = LeaceFitter(num_features, num_classes, dtype=dtype, shrinkage=shrinkage)
+    oracle = OracleFitter(num_features, num_classes, dtype=dtype, shrinkage=shrinkage)
 
     # Generate random data
     torch.manual_seed(42)
-    x_data = [torch.randn(batch_size, num_features) for _ in range(num_batches)]
+    x_data = [
+        torch.randn(batch_size, num_features, dtype=dtype) for _ in range(num_batches)
+    ]
     z_data = [
         torch.randint(0, num_classes, (batch_size, num_classes))
         for _ in range(num_batches)
@@ -59,8 +62,12 @@ def test_stats(shrinkage: bool):
     x_centered = x_all - mean_x
     z_centered = z_all - mean_z
 
-    expected_sigma_xx = torch.einsum("b...m,b...n->...mn", x_centered, x_centered)
-    expected_sigma_zz = torch.einsum("b...m,b...n->...mn", z_centered, z_centered)
+    expected_sigma_xx = torch.einsum(
+        "b...m,b...n->...mn", x_centered.conj(), x_centered
+    )
+    expected_sigma_zz = torch.einsum(
+        "b...m,b...n->...mn", z_centered.conj(), z_centered
+    )
     if shrinkage:
         expected_sigma_xx = optimal_linear_shrinkage(
             expected_sigma_xx / N, batch_size * num_batches
@@ -72,7 +79,9 @@ def test_stats(shrinkage: bool):
         expected_sigma_xx /= N - 1
         expected_sigma_zz /= N - 1
 
-    expected_sigma_xz = torch.einsum("b...m,b...n->...mn", x_centered, z_centered)
+    expected_sigma_xz = torch.einsum(
+        "b...m,b...n->...mn", x_centered.conj(), z_centered
+    )
     expected_sigma_xz /= N - 1
 
     torch.testing.assert_close(fitter.sigma_xx, expected_sigma_xx)
