@@ -31,12 +31,12 @@ def optimal_linear_shrinkage(S_n: Tensor, n: int | Tensor) -> Tensor:
     trace_S = trace(S_n)
     sigma0 = eye * trace_S / p
 
-    sigma0_norm_sq = sigma0.pow(2).sum(dim=(-2, -1), keepdim=True)
-    S_norm_sq = S_n.pow(2).sum(dim=(-2, -1), keepdim=True)
+    sigma0_norm_sq = sigma0.norm(dim=(-2, -1), keepdim=True) ** 2
+    S_norm_sq = S_n.norm(dim=(-2, -1), keepdim=True) ** 2
 
     prod_trace = trace(S_n @ sigma0)
-    top = trace_S.pow(2) * sigma0_norm_sq / n
-    bottom = S_norm_sq * sigma0_norm_sq - prod_trace**2
+    top = trace_S * trace_S.conj() * sigma0_norm_sq / n
+    bottom = S_norm_sq * sigma0_norm_sq - prod_trace * prod_trace.conj()
 
     # Epsilon prevents dividing by zero for the zero matrix. In that case we end up
     # setting alpha = 0, beta = 1, but it doesn't matter since we're shrinking toward
