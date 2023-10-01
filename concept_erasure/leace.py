@@ -39,7 +39,7 @@ class LeaceEraser:
         )
         return eye - self.proj_left @ self.proj_right
 
-    def __call__(self, x: Tensor) -> Tensor:
+    def __call__(self, x: Tensor, _: Tensor | None = None) -> Tensor:
         """Apply the projection to the input tensor."""
         x_ = x.reshape(-1, self.proj_left.shape[0])
         delta = x_ - self.bias if self.bias is not None else x_
