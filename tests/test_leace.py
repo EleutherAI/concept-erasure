@@ -149,7 +149,7 @@ def test_linear_erasure(num_classes: int):
     X_t = torch.from_numpy(X)
     Y_t = torch.from_numpy(Y)
     if num_classes > 1:
-        Y_1h = torch.nn.functional.one_hot(Y_t, num_classes)
+        Y_1h = torch.nn.functional.one_hot(Y_t, num_distinct)
     else:
         Y_1h = Y_t
 

@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor
 
 from .caching import cached_property, invalidates_cache
@@ -40,11 +41,12 @@ class LeaceEraser:
 
     def __call__(self, x: Tensor) -> Tensor:
         """Apply the projection to the input tensor."""
-        delta = x - self.bias if self.bias is not None else x
+        x_ = x.reshape(-1, self.proj_left.shape[0])
+        delta = x_ - self.bias if self.bias is not None else x_
 
         # Ensure we do the matmul in the most efficient order.
-        x_ = x - (delta @ self.proj_right.mH) @ self.proj_left.mH
-        return x_.type_as(x)
+        x_ = x_ - (delta @ self.proj_right.mH) @ self.proj_left.mH
+        return x_.reshape_as(x).type_as(x)
 
 
 class LeaceFitter:
@@ -163,6 +165,10 @@ class LeaceFitter:
         if self.method == "leace":
             assert self.sigma_xx_ is not None
             self.sigma_xx_.addmm_(delta_x.mH, delta_x2)
+
+        # Automatically convert labels to one-hot if needed
+        if not torch.is_floating_point(z) and z.shape == x.shape[:-1]:
+            z = F.one_hot(z, num_classes=c).type_as(x)
 
         z = z.reshape(n, -1).type_as(x)
         assert z.shape[-1] == c, f"Unexpected number of classes {z.shape[-1]}"

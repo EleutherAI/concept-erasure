@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor
 
 from .caching import cached_property, invalidates_cache
@@ -19,13 +20,20 @@ class OracleEraser:
         """Convenience method to fit an OracleEraser on data and return it."""
         return OracleFitter.fit(x, z, **kwargs).eraser
 
-    def __call__(self, x: Tensor, z: Tensor) -> Tensor:
+    def __call__(self, x: Tensor, z: Tensor | int) -> Tensor:
         """Replace `x` with the OLS residual given `z`."""
-        # Ensure Z is at least 2D
-        z = z.reshape(len(z), -1).type_as(x)
-        expected_x = (z - self.mean_z) @ self.coef.T
+        x_ = x.reshape(-1, len(self.coef))
+        z = torch.as_tensor(z, device=x.device)
 
-        return x.sub(expected_x).type_as(x)
+        # Automatically convert labels to one-hot if needed
+        if not torch.is_floating_point(z) and z.shape[:] == x.shape[:-1]:
+            c = len(self.mean_z)
+            if c > 1:
+                z = F.one_hot(z, num_classes=c).type_as(x)
+            z = F.one_hot(z, num_classes=c).type_as(x)
+
+        expected_x = (z - self.mean_z) @ self.coef.T
+        return x_.sub(expected_x).reshape_as(x).type_as(x)
 
 
 class OracleFitter:
@@ -111,6 +119,10 @@ class OracleFitter:
         # Welford's online algorithm
         delta_x = x - self.mean_x
         self.mean_x += delta_x.sum(dim=0) / self.n
+
+        # Automatically convert labels to one-hot if needed
+        if not torch.is_floating_point(z) and z.shape == x.shape[:-1]:
+            z = F.one_hot(z, num_classes=c).type_as(x)
 
         z = z.reshape(n, -1).type_as(x)
         assert z.shape[-1] == c, f"Unexpected number of classes {z.shape[-1]}"

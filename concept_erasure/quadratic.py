@@ -29,12 +29,15 @@ class QuadraticEraser:
 
     def optimal_transport(self, z: int, x: Tensor) -> Tensor:
         """Transport `x` to the barycenter, assuming it was sampled from class `z`"""
-        x_ = x.flatten(1)
+        x_ = x.reshape(-1, *self.global_mean.shape)
         x_ = (x_ - self.class_means[z]) @ self.ot_maps[z].mH + self.global_mean
-        return x_.view_as(x)
+        return x_.reshape_as(x).type_as(x)
 
-    def __call__(self, x: Tensor, z: Tensor) -> Tensor:
+    def __call__(self, x: Tensor, z: Tensor | int) -> Tensor:
         """Apply erasure to `x` with oracle labels `z`."""
+        if isinstance(z, int):
+            return self.optimal_transport(z, x)
+
         # Efficiently group `x` by `z`, optimally transport each group, then coalesce
         return groupby(x, z).map(self.optimal_transport).coalesce()
 
