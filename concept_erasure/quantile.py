@@ -1,6 +1,8 @@
 import torch
 from torch import Tensor
 
+from .groupby import groupby
+
 
 def cdf(x: float | Tensor, q: Tensor) -> Tensor:
     """Evaluate empirical CDF defined by quantiles `q` on `x`.
@@ -26,7 +28,7 @@ def icdf(p: Tensor, q: Tensor) -> Tensor:
     """(Pseudo-)inverse of the ECDF defined by quantiles `q`.
 
     Returns the *smallest* `x` such that the ECDF of `x` is greater than or
-    equal to `p`. If `interpolate` is true, then the ECDF is linearly
+    equal to `p`.
 
     Args:
         x: `[...]` Tensor of data points of arbitrary shape.
@@ -46,3 +48,42 @@ def icdf(p: Tensor, q: Tensor) -> Tensor:
     # The ICDF of zero is always -inf because there is no finite smallest `x`
     # such that the CDF of `x` is greater than or equal to zero.
     return left_q.where(p > 0, -torch.inf)
+
+
+class CdfEraser:
+    """Componentwise probability integral transform."""
+
+    lut: Tensor
+    """`[k, ..., num_bins]` batch of lookup tables."""
+
+    dim: int
+    """Dimension along which to group the data."""
+
+    def __init__(
+        self, x: Tensor, z: Tensor, num_bins: int = 256, dim: int = 0,
+    ):
+        # Efficiently get a view onto each class
+        grouped = groupby(x, z, dim=dim)
+        self.dim = dim
+
+        d, k = x.shape[-1], len(grouped.labels)
+        self.lut = x.new_empty([k, d, num_bins])
+
+        grid = torch.linspace(0, 1, num_bins, device=x.device)
+        for i, grp in grouped:
+            self.lut[i] = grp.quantile(grid, dim=dim).movedim(0, -1)
+
+    @property
+    def num_bins(self) -> int:
+        return self.lut.shape[-1]
+
+    def cdf(self, z: int, x: Tensor) -> Tensor:
+        return cdf(x, self.lut[z])
+    
+    def __call__(self, x: Tensor, z: Tensor) -> Tensor:
+        """Erase the class `z` from the input `x`."""
+        return groupby(
+            x, z, dim=self.dim
+        ).map(
+            lambda z, x: cdf(x, self.lut[z])
+        ).coalesce()
