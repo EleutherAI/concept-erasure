@@ -3,7 +3,7 @@ from .groupby import GroupedTensor, groupby
 from .leace import ErasureMethod, LeaceEraser, LeaceFitter
 from .oracle import OracleEraser, OracleFitter
 from .quadratic import QuadraticEraser, QuadraticFitter
-from .quantile import cdf, icdf
+from .quantile import cdf, icdf, CdfEraser
 from .shrinkage import optimal_linear_shrinkage
 from .utils import assert_type
 
@@ -13,6 +13,7 @@ __all__ = [
     "groupby",
     "icdf",
     "optimal_linear_shrinkage",
+    "CdfEraser",
     "ConceptScrubber",
     "ErasureMethod",
     "GroupedTensor",

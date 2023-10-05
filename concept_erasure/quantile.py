@@ -66,8 +66,8 @@ class CdfEraser:
         grouped = groupby(x, z, dim=dim)
         self.dim = dim
 
-        d, k = x.shape[-1], len(grouped.labels)
-        self.lut = x.new_empty([k, d, num_bins])
+        k = len(grouped.labels)
+        self.lut = x.new_empty([k, *x.shape[1:], num_bins])
 
         grid = torch.linspace(0, 1, num_bins, device=x.device)
         for i, grp in grouped:
@@ -78,12 +78,9 @@ class CdfEraser:
         return self.lut.shape[-1]
 
     def cdf(self, z: int, x: Tensor) -> Tensor:
-        return cdf(x, self.lut[z])
+        # breakpoint()
+        return cdf(x.movedim(0, -1), self.lut[z]).movedim(-1, 0)
     
     def __call__(self, x: Tensor, z: Tensor) -> Tensor:
         """Erase the class `z` from the input `x`."""
-        return groupby(
-            x, z, dim=self.dim
-        ).map(
-            lambda z, x: cdf(x, self.lut[z])
-        ).coalesce()
+        return groupby(x, z, dim=self.dim).map(self.cdf).coalesce()
