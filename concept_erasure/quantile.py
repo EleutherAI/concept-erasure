@@ -1,4 +1,5 @@
 import torch
+from dataclasses import dataclass
 from torch import Tensor
 
 from .groupby import groupby
@@ -43,11 +44,7 @@ def icdf(p: Tensor, q: Tensor) -> Tensor:
 
     # Silently handle the case where p is outside [0, 1]
     soft_ranks = torch.nextafter(p * n, p.new_tensor(0.0))
-    left_q = q[..., soft_ranks.int()]
-
-    # The ICDF of zero is always -inf because there is no finite smallest `x`
-    # such that the CDF of `x` is greater than or equal to zero.
-    return left_q.where(p > 0, -torch.inf)
+    return q[..., soft_ranks.int()]
 
 
 class CdfEraser:
@@ -80,6 +77,15 @@ class CdfEraser:
     def cdf(self, z: int, x: Tensor) -> Tensor:
         return cdf(x, self.lut[z])
     
+    def transport(self, x: Tensor, source_z: Tensor, target_z: int) -> Tensor:
+        """Transport `x` from class `source_z` to class `target_z`"""
+        return groupby(
+            x, source_z, dim=self.dim
+        ).map(
+            # Probability integral transform, followed by inverse for target class
+            lambda z, x: icdf(cdf(x, self.lut[z]), self.lut[target_z])
+        ).coalesce()
+
     def __call__(self, x: Tensor, z: Tensor) -> Tensor:
         """Erase the class `z` from the input `x`."""
         return groupby(
