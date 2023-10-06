@@ -33,7 +33,7 @@ def test_cdf(x, q):
     assert torch.all(p_inv <= x)
     assert torch.all(cdf(p_inv, q) >= p)
 
-    # Should match SciPy when interpolate=False
+    # Should match SciPy
     torch.testing.assert_close(
         cdf(x, q),
         torch.from_numpy(scipy_cdf(q).cdf.evaluate(x)).float(),
