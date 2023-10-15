@@ -1,5 +1,4 @@
 import torch
-from dataclasses import dataclass
 from torch import Tensor
 
 from .groupby import groupby
@@ -42,9 +41,8 @@ def icdf(p: Tensor, q: Tensor) -> Tensor:
     n = q.shape[-1]
     assert n > 2, "Must have at least two quantiles to interpolate."
 
-    # Silently handle the case where p is outside [0, 1]
     soft_ranks = torch.nextafter(p * n, p.new_tensor(0.0))
-    return q[..., soft_ranks.int()]
+    return q.gather(-1, soft_ranks.long()).where(p > 0, -torch.inf)
 
 
 class CdfEraser:
@@ -57,7 +55,11 @@ class CdfEraser:
     """Dimension along which to group the data."""
 
     def __init__(
-        self, x: Tensor, z: Tensor, num_bins: int = 256, dim: int = 0,
+        self,
+        x: Tensor,
+        z: Tensor,
+        num_bins: int = 256,
+        dim: int = 0,
     ):
         # Efficiently get a view onto each class
         grouped = groupby(x, z, dim=dim)
@@ -77,15 +79,19 @@ class CdfEraser:
     def cdf(self, z: int, x: Tensor) -> Tensor:
         # breakpoint()
         return cdf(x.movedim(0, -1), self.lut[z]).movedim(-1, 0)
-    
+
     def transport(self, x: Tensor, source_z: Tensor, target_z: int) -> Tensor:
         """Transport `x` from class `source_z` to class `target_z`"""
-        return groupby(
-            x, source_z, dim=self.dim
-        ).map(
-            # Probability integral transform, followed by inverse for target class
-            lambda z, x: icdf(cdf(x, self.lut[z]), self.lut[target_z])
-        ).coalesce()
+        return (
+            groupby(x, source_z, dim=self.dim)
+            .map(
+                # Probability integral transform, followed by inverse for target class
+                lambda z, x: icdf(
+                    cdf(x.movedim(0, -1), self.lut[z]), self.lut[target_z]
+                ).movedim(-1, 0)
+            )
+            .coalesce()
+        )
 
     def __call__(self, x: Tensor, z: Tensor) -> Tensor:
         """Erase the class `z` from the input `x`."""
