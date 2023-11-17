@@ -5,9 +5,15 @@ import pytorch_lightning as pl
 import torch
 import torchmetrics as tm
 import torchvision as tv
+from swin_transformer_v2 import SwinTransformerV2
 from torch import nn
-from torch.optim import RAdam
+from torch.optim import SGD, RAdam
 from torch.optim.lr_scheduler import CosineAnnealingLR
+from transformers import (
+    ConvNextV2Config,
+    ConvNextV2ForImageClassification,
+    get_cosine_schedule_with_warmup,
+)
 
 
 class Mlp(pl.LightningModule):
@@ -45,6 +51,9 @@ class Mlp(pl.LightningModule):
         x, y = batch
 
         y_hat = self(x)
+        if not isinstance(y_hat, torch.Tensor):
+            y_hat = y_hat["logits"]
+
         loss = torch.nn.functional.cross_entropy(y_hat, y)
         self.log("train_loss", loss)
 
@@ -61,8 +70,10 @@ class Mlp(pl.LightningModule):
         x, y = batch
 
         y_hat = self(x)
-        loss = torch.nn.functional.cross_entropy(y_hat, y)
+        if not isinstance(y_hat, torch.Tensor):
+            y_hat = y_hat["logits"]
 
+        loss = torch.nn.functional.cross_entropy(y_hat, y)
         self.val_acc(y_hat, y)
         self.log("val_loss", loss)
         self.log("val_acc", self.val_acc, prog_bar=True)
@@ -72,6 +83,9 @@ class Mlp(pl.LightningModule):
         x, y = batch
 
         y_hat = self(x)
+        if not isinstance(y_hat, torch.Tensor):
+            y_hat = y_hat["logits"]
+
         loss = torch.nn.functional.cross_entropy(y_hat, y)
 
         self.test_acc(y_hat, y)
@@ -80,7 +94,7 @@ class Mlp(pl.LightningModule):
         return loss
 
     def configure_optimizers(self):
-        opt = RAdam(self.parameters(), lr=1e-4)
+        opt = RAdam(self.parameters(), lr=0.0005)
         return [opt], [CosineAnnealingLR(opt, T_max=200)]
 
 
@@ -101,7 +115,114 @@ class MlpMixer(Mlp):
 
 class ResNet(Mlp):
     def build_net(self):
-        self.net = tv.models.resnet18(pretrained=False, num_classes=self.hparams["k"])
+        model = tv.models.regnet_y_400mf(num_classes=self.hparams["k"])
+        model.stem[0].stride = 1
+        model.stem.insert(0, nn.Upsample(scale_factor=2))
+        self.net = model
+
+    def configure_optimizers(self):
+        opt = SGD(self.parameters(), lr=0.1, momentum=0.9, weight_decay=5e-5)
+        return [opt], [CosineAnnealingLR(opt, T_max=50)]
+
+
+class ConvNext(Mlp):
+    def build_net(self):
+        cfg = ConvNextV2Config(
+            image_size=32,
+            # Femto architecture
+            depths=[2, 2, 6, 2],
+            drop_path_rate=0.1,
+            hidden_sizes=[48, 96, 192, 384],
+            num_labels=10,
+            # The default of 4 x 4 patches shrinks the image too aggressively for
+            # low-resolution images like CIFAR-10
+            patch_size=2,
+        )
+        model = ConvNextV2ForImageClassification(cfg)
+
+        # HuggingFace initialization is terrible; use PyTorch init instead
+        for m in model.modules():
+            if isinstance(m, (nn.Conv2d, nn.Linear)):
+                m.reset_parameters()
+
+        self.net = model
+
+    def configure_optimizers(self):
+        opt = torch.optim.AdamW(self.parameters(), lr=0.005, weight_decay=0.05)
+        schedule = get_cosine_schedule_with_warmup(opt, 2000, self.trainer.max_steps)
+        return [opt], [{"scheduler": schedule, "interval": "step"}]
+
+
+class ClassificationModelWrapper(nn.Module):
+    """
+    Wraps a Swin Transformer V2 model to perform image classification.
+    """
+
+    def __init__(
+        self,
+        model: SwinTransformerV2,
+        number_of_classes: int = 10,
+        output_channels: int = 384,
+    ) -> None:
+        """
+        Constructor method
+        :param model: (SwinTransformerV2) Swin Transformer V2 model
+        :param number_of_classes: (int) Number of classes to predict
+        :param output_channels: (int) Output channels of the last feature map of the
+        Swin Transformer V2 model
+        """
+        # Call super constructor
+        super(ClassificationModelWrapper, self).__init__()
+        # Save model
+        self.model: SwinTransformerV2 = model
+        # Init adaptive average pooling layer
+        self.pooling: nn.Module = nn.AdaptiveAvgPool2d(1)
+        # Init classification head
+        self.classification_head: nn.Module = nn.Linear(
+            in_features=output_channels, out_features=number_of_classes
+        )
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass
+        :param input: (torch.Tensor) Input tensor of the shape [batch size, channels,
+        height, width]
+        :return: (torch.Tensor) Output classification of the shape [batch size, number
+        of classes]
+        """
+        # Compute features
+        features: list[torch.Tensor] = self.model(input)
+        # Compute classification
+        classification: torch.Tensor = self.classification_head(
+            self.pooling(features[-1]).flatten(start_dim=1)
+        )
+        return classification
+
+
+class Swin(Mlp):
+    def build_net(self):
+        model = SwinTransformerV2(
+            in_channels=3,
+            embedding_channels=48,
+            depths=(2, 2, 6, 2),
+            dropout_path=0.2,
+            input_resolution=(32, 32),
+            number_of_heads=(3, 6, 12, 24),
+            patch_size=2,
+            window_size=8,
+        )
+        model = ClassificationModelWrapper(model, number_of_classes=self.hparams["k"])
+
+        self.net = model
+
+    def configure_optimizers(self):
+        opt = torch.optim.AdamW(
+            self.parameters(),
+            # lr=0.002,
+            weight_decay=0.05,
+        )
+        schedule = get_cosine_schedule_with_warmup(opt, 2_000, 2**16)
+        return [opt], [{"scheduler": schedule, "interval": "step"}]
 
 
 class ViT(MlpMixer):

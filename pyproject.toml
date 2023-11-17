@@ -29,9 +29,6 @@ dev = [
     "transformers>=4.0.0",
 ]
 
-[project.scripts]
-elk = "elk.__main__:run"
-
 [tool.pyright]
 include = ["concept_erasure*"]
 reportPrivateImportUsage = false
