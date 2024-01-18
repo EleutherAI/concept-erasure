@@ -2,7 +2,7 @@ from .concept_scrubber import ConceptScrubber
 from .groupby import GroupedTensor, groupby
 from .leace import ErasureMethod, LeaceEraser, LeaceFitter
 from .oracle import OracleEraser, OracleFitter
-from .quadratic import QuadraticEraser, QuadraticFitter
+from .quadratic import QuadraticEditor, QuadraticEraser, QuadraticFitter
 from .quantile import CdfEraser, cdf, icdf
 from .shrinkage import optimal_linear_shrinkage
 from .utils import assert_type
@@ -21,6 +21,7 @@ __all__ = [
     "LeaceFitter",
     "OracleEraser",
     "OracleFitter",
+    "QuadraticEditor",
     "QuadraticEraser",
     "QuadraticFitter",
 ]

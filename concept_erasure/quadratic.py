@@ -149,10 +149,13 @@ class QuadraticFitter:
 
         return self
 
-    def editor(self) -> QuadraticEditor:
+    def editor(self, device: str | None = None) -> QuadraticEditor:
         """Quadratic editor for the concept."""
         sigma = self.sigma_xx
-        return QuadraticEditor(self.mean_x, ot_map(sigma[:, None], sigma))
+        device = device or sigma.device
+
+        T = ot_map(sigma[:, None], sigma).to(device)
+        return QuadraticEditor(self.mean_x.to(device), T)
 
     @cached_property
     def eraser(self) -> QuadraticEraser:
