@@ -29,7 +29,10 @@ quantiles = (
 def test_cdf(x, q):
     # Pseudo-inverse property
     p = cdf(x, q)
-    p_inv = icdf(p, q)
+
+    # Strictly speaking, icdf ought to return -inf when p = 0, but in practice we
+    # want to clip to the minimum value, so we've implemented it that way.
+    p_inv = icdf(p, q).where(p > 0, -torch.inf)
     assert torch.all(p_inv <= x)
     assert torch.all(cdf(p_inv, q) >= p)
 

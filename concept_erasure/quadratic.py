@@ -149,7 +149,7 @@ class QuadraticFitter:
 
         return self
 
-    def editor(self, device: str | None = None) -> QuadraticEditor:
+    def editor(self, device: str | torch.device | None = None) -> QuadraticEditor:
         """Quadratic editor for the concept."""
         sigma = self.sigma_xx
         device = device or sigma.device

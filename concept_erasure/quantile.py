@@ -30,6 +30,11 @@ def icdf(p: Tensor, q: Tensor) -> Tensor:
     Returns the *smallest* `x` such that the ECDF of `x` is greater than or
     equal to `p`.
 
+    NOTE: Strictly speaking, this function should return `-inf` when `p` is exactly
+    zero, because there is no smallest `x` such that `p(x) = 0`. But in practice we
+    want this function to always return a finite value, so we clip to the minimum
+    value in `q`.
+
     Args:
         x: `[...]` Tensor of data points of arbitrary shape.
         q: `[..., num_quantiles]` batch of quantiles. Must be sorted, and
@@ -42,11 +47,11 @@ def icdf(p: Tensor, q: Tensor) -> Tensor:
     assert n > 2, "Must have at least two quantiles to interpolate."
 
     soft_ranks = torch.nextafter(p * n, p.new_tensor(0.0))
-    return q.gather(-1, soft_ranks.long()).where(p > 0, -torch.inf)
+    return q.gather(-1, soft_ranks.long())
 
 
-class CdfEraser:
-    """Componentwise probability integral transform."""
+class QuantileNormalizer:
+    """Componentwise quantile normalization."""
 
     lut: Tensor
     """`[k, ..., num_bins]` batch of lookup tables."""
@@ -77,8 +82,14 @@ class CdfEraser:
         return self.lut.shape[-1]
 
     def cdf(self, z: int, x: Tensor) -> Tensor:
-        # breakpoint()
         return cdf(x.movedim(0, -1), self.lut[z]).movedim(-1, 0)
+
+    def sample(self, z: int, n: int) -> Tensor:
+        lut = self.lut[z]
+
+        # Sample p from uniform distribution, then apply inverse CDF
+        p = torch.rand(*lut[..., 0].shape, n, device=lut.device)
+        return icdf(p, lut).movedim(-1, 0)
 
     def transport(self, x: Tensor, source_z: Tensor, target_z: int) -> Tensor:
         """Transport `x` from class `source_z` to class `target_z`"""
@@ -92,7 +103,3 @@ class CdfEraser:
             )
             .coalesce()
         )
-
-    def __call__(self, x: Tensor, z: Tensor) -> Tensor:
-        """Erase the class `z` from the input `x`."""
-        return groupby(x, z, dim=self.dim).map(self.cdf).coalesce()
