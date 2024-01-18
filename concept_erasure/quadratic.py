@@ -51,8 +51,11 @@ class QuadraticEditor:
 
     def transport(self, x: Tensor, source_z: int, target_z: int) -> Tensor:
         """Transport `x` from class `source_z` to class `target_z`"""
+        x_ = x.flatten(1)
+
         T = self.ot_maps[source_z, target_z]
-        return (x - self.class_means[source_z]) @ T.mH + self.class_means[target_z]
+        x_ = (x_ - self.class_means[source_z]) @ T.mH + self.class_means[target_z]
+        return x_.view_as(x)
 
     def __call__(self, x: Tensor, source_z: Tensor, target_z: int) -> Tensor:
         """Transport `x` from classes `source_z` to class `target_z`."""
@@ -146,7 +149,7 @@ class QuadraticFitter:
 
         return self
 
-    def editor(self, device: str | None = None) -> QuadraticEditor:
+    def editor(self, device: str | torch.device | None = None) -> QuadraticEditor:
         """Quadratic editor for the concept."""
         sigma = self.sigma_xx
         device = device or sigma.device

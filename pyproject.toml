@@ -16,6 +16,7 @@ version = "0.2.4"
 
 [project.optional-dependencies]
 dev = [
+    "hypothesis",
     "numpy",
     "pre-commit",
     "pytest",
