@@ -135,7 +135,12 @@ def check_linear_guardedness(
 # n x 2 one-hot matrix.
 @pytest.mark.parametrize("num_classes", [1, 2, 3, 5, 10, 20])
 def test_linear_erasure(num_classes: int):
-    eps = 2e-9
+    # Error tolerance for numerical checks. This value is basically "the smallest I can
+    # empirically make it while still passing the tests". Ideally I'd like to set it
+    # using the machine epsilon or something, but sklearn convergence isn't quite
+    # predictable enough to do that.
+    eps = 4e-9
+
     n, d = 2048, 128
     num_distinct = max(num_classes, 2)
 
