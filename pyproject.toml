@@ -46,6 +46,7 @@ include = ["concept_erasure*"]
 # Enable pycodestyle (`E`), Pyflakes (`F`), and isort (`I`) codes
 # See https://beta.ruff.rs/docs/rules/ for more possible rules
 select = ["E", "F", "I"]
+ignore = ["E741"]   # Ambiguous variable name
 # Same as Black.
 line-length = 88
 # Avoid automatically removing unused imports in __init__.py files.

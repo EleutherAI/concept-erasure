@@ -1,36 +1,8 @@
 import torch
 from torch import Tensor
 
+from .psd_sqrt import psd_sqrt, psd_sqrt_rsqrt
 from .shrinkage import trace
-
-
-def is_positive_definite(A: Tensor) -> Tensor:
-    """Efficiently check if `A` is p.d. by attempting Cholesky decomposition."""
-    return torch.linalg.cholesky_ex(A).info.eq(0)
-
-
-@torch.jit.script
-def psd_sqrt(A: Tensor) -> Tensor:
-    """Compute the unique p.s.d. square root of a positive semidefinite matrix."""
-    L, U = torch.linalg.eigh(A)
-    L = L[..., None, :].clamp_min(0.0)
-    return U * L.sqrt() @ U.mH
-
-
-def psd_sqrt_rsqrt(A: Tensor) -> tuple[Tensor, Tensor]:
-    """Efficiently compute both the p.s.d. sqrt & pinv sqrt of p.s.d. matrix `A`."""
-    L, U = torch.linalg.eigh(A)
-    L = L[..., None, :].clamp_min(0.0)
-
-    # Square root is easy
-    sqrt = U * L.sqrt() @ U.mH
-
-    # We actually compute the pseudo-inverse here for numerical stability.
-    # Use the same heuristic as `torch.linalg.pinv` to determine the tolerance.
-    thresh = L[..., None, -1] * A.shape[-1] * torch.finfo(A.dtype).eps
-    rsqrt = U * torch.where(L > thresh, L.rsqrt(), 0.0) @ U.mH
-
-    return sqrt, rsqrt
 
 
 def ot_barycenter(

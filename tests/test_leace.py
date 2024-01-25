@@ -18,7 +18,7 @@ from concept_erasure import (
     QuadraticEraser,
     optimal_linear_shrinkage,
 )
-from concept_erasure.optimal_transport import is_positive_definite
+from concept_erasure.psd_sqrt import is_positive_definite
 
 
 @pytest.mark.parametrize("shrinkage", [False, True])

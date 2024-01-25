@@ -3,12 +3,12 @@ import torch
 from torch.distributions import Dirichlet
 
 from concept_erasure.optimal_transport import (
-    is_positive_definite,
     ot_barycenter,
     ot_distance,
     ot_map,
     ot_midpoint,
 )
+from concept_erasure.psd_sqrt import is_positive_definite
 
 
 @pytest.mark.parametrize("d", [1, 2, 4, 8, 16, 32])

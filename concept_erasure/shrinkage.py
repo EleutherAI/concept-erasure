@@ -30,7 +30,7 @@ def optimal_linear_shrinkage(
 
     trace_S = trace(S_n)
 
-    # Since sigma0 is I * tr(S_n) / p, its squared Frobenius norm is tr(S_n) ** 2 / p.
+    # Since sigma0 is I * tr(S_n)
     sigma0_norm_sq = trace_S**2 / p
     S_norm_sq = S_n.norm(dim=(-2, -1), keepdim=True) ** 2
 
