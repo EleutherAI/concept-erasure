@@ -49,7 +49,7 @@ def newton_schulz_sqrt_rsqrt(A: Tensor, max_iter: int = 100, rsqrt_iter: int = 6
     # Pre-normalize A to help with convergence
     scale = torch.norm(A, p="fro", keepdim=True)
     Y = A_scaled = A / scale
-    Z = I = torch.eye(len(A), device=A.device, dtype=A.dtype)
+    Z = I = torch.eye(d, device=A.device, dtype=A.dtype)
 
     # Perform the Newton-Schulz iterations
     for _ in range(max_iter):
