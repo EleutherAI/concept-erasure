@@ -259,7 +259,7 @@ class LeaceFitter:
 
         # Apply Random Matrix Theory-based shrinkage
         if self.shrinkage:
-            return optimal_linear_shrinkage(S_hat / self.n, self.n)
+            return optimal_linear_shrinkage(S_hat / self.n, self.n, inplace=True)
 
         # Just apply Bessel's correction
         else:

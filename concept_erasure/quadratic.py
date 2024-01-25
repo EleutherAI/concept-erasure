@@ -195,7 +195,7 @@ class QuadraticFitter:
         # Apply Random Matrix Theory-based shrinkage
         n = self.n.view(-1, 1, 1)
         if self.shrinkage:
-            return optimal_linear_shrinkage(S_hat / n, n)
+            return optimal_linear_shrinkage(S_hat / n, n, inplace=True)
 
         # Just apply Bessel's correction
         else:
