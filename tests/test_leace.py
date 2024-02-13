@@ -21,6 +21,7 @@ from concept_erasure import (
 from concept_erasure.psd_sqrt import is_positive_definite
 
 
+@pytest.mark.parametrize("sqrt_method", ["legacy", "psd", "newton"])
 @pytest.mark.parametrize("shrinkage", [False, True])
 @pytest.mark.parametrize("dtype", [torch.float64, torch.complex128])
 def test_stats(shrinkage: bool, dtype: torch.dtype):
