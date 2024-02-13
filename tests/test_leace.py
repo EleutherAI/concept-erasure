@@ -12,6 +12,7 @@ from sklearn.svm import LinearSVC
 
 from concept_erasure import (
     ErasureMethod,
+    SqrtMethod,
     LeaceFitter,
     OracleEraser,
     OracleFitter,
@@ -24,14 +25,14 @@ from concept_erasure.psd_sqrt import is_positive_definite
 @pytest.mark.parametrize("sqrt_method", ["legacy", "psd", "newton"])
 @pytest.mark.parametrize("shrinkage", [False, True])
 @pytest.mark.parametrize("dtype", [torch.float64, torch.complex128])
-def test_stats(shrinkage: bool, dtype: torch.dtype):
+def test_stats(sqrt_method: SqrtMethod, shrinkage: bool, dtype: torch.dtype):
     batch_size = 10
     num_batches = 5
     num_classes = 2
     num_features = 3
     N = batch_size * num_batches
 
-    fitter = LeaceFitter(num_features, num_classes, dtype=dtype, shrinkage=shrinkage)
+    fitter = LeaceFitter(num_features, num_classes, dtype=dtype, shrinkage=shrinkage, sqrt_method=sqrt_method)
     oracle = OracleFitter(num_features, num_classes, dtype=dtype, shrinkage=shrinkage)
 
     # Generate random data

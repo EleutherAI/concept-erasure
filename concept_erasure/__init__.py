@@ -1,6 +1,6 @@
 from .concept_scrubber import ConceptScrubber
 from .groupby import GroupedTensor, groupby
-from .leace import ErasureMethod, LeaceEraser, LeaceFitter
+from .leace import ErasureMethod, SqrtMethod, LeaceEraser, LeaceFitter
 from .oracle import OracleEraser, OracleFitter
 from .quadratic import QuadraticEditor, QuadraticEraser, QuadraticFitter
 from .quantile import QuantileNormalizer, cdf, icdf
@@ -15,6 +15,7 @@ __all__ = [
     "optimal_linear_shrinkage",
     "ConceptScrubber",
     "ErasureMethod",
+    "SqrtMethod",
     "GroupedTensor",
     "LeaceEraser",
     "LeaceFitter",
