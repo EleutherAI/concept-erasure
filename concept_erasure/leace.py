@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Optional
 
 import torch
 from torch import Tensor
@@ -87,6 +87,7 @@ class LeaceFitter:
         x_dim: int,
         z_dim: int,
         method: ErasureMethod = "leace",
+        ema_beta: Optional[float] = None,
         *,
         affine: bool = True,
         constrain_cov_trace: bool = True,
@@ -125,6 +126,7 @@ class LeaceFitter:
         self.affine = affine
         self.constrain_cov_trace = constrain_cov_trace
         self.method = method
+        self.ema_beta = ema_beta
         self.shrinkage = shrinkage
 
         assert svd_tol > 0.0, "`svd_tol` must be positive for numerical stability."
@@ -152,9 +154,18 @@ class LeaceFitter:
         n, d2 = x.shape
 
         assert d == d2, f"Unexpected number of features {d2}"
-        self.n += n
 
-        # Welford's online algorithm
+        beta = self.ema_beta
+
+        if beta is None:
+            beta = 1
+
+        # This handles the bias correction automatically
+        self.n *= beta
+        self.n += n
+        # self.n will asymptote to n/(1-beta)
+
+        # Welford's online algorithm, weighted version
         delta_x = x - self.mean_x
         self.mean_x += delta_x.sum(dim=0) / self.n
         delta_x2 = x - self.mean_x
@@ -162,7 +173,7 @@ class LeaceFitter:
         # Update the covariance matrix of X if needed (for LEACE)
         if self.method == "leace":
             assert self.sigma_xx_ is not None
-            self.sigma_xx_.addmm_(delta_x.mH, delta_x2)
+            self.sigma_xx_.addmm_(delta_x.mH, delta_x2, beta=beta)
 
         z = z.reshape(n, -1).type_as(x)
         assert z.shape[-1] == c, f"Unexpected number of classes {z.shape[-1]}"
@@ -172,7 +183,7 @@ class LeaceFitter:
         delta_z2 = z - self.mean_z
 
         # Update the cross-covariance matrix
-        self.sigma_xz_.addmm_(delta_x.mH, delta_z2)
+        self.sigma_xz_.addmm_(delta_x.mH, delta_z2, beta=beta)
 
         return self
 
