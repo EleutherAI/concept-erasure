@@ -7,8 +7,10 @@ from torch import Tensor
 from .caching import cached_property, invalidates_cache
 from .shrinkage import optimal_linear_shrinkage
 
-ErasureMethod = Literal["leace", "orth"]
+from .psd_sqrt import newton_schulz_sqrt_rsqrt, psd_sqrt_rsqrt
 
+ErasureMethod = Literal["leace", "orth"]
+SqrtMethod = Literal["newton", "psd", "legacy"]
 
 @dataclass(frozen=True)
 class LeaceEraser:
@@ -87,6 +89,7 @@ class LeaceFitter:
         x_dim: int,
         z_dim: int,
         method: ErasureMethod = "leace",
+        sqrt_method: SqrtMethod = "legacy",
         *,
         affine: bool = True,
         constrain_cov_trace: bool = True,
@@ -125,6 +128,7 @@ class LeaceFitter:
         self.affine = affine
         self.constrain_cov_trace = constrain_cov_trace
         self.method = method
+        self.sqrt_method = sqrt_method
         self.shrinkage = shrinkage
 
         assert svd_tol > 0.0, "`svd_tol` must be positive for numerical stability."
@@ -184,16 +188,22 @@ class LeaceFitter:
         # Compute the whitening and unwhitening matrices
         if self.method == "leace":
             sigma = self.sigma_xx
-            L, V = torch.linalg.eigh(sigma)
 
-            # Threshold used by torch.linalg.pinv
-            mask = L > (L[-1] * sigma.shape[-1] * torch.finfo(L.dtype).eps)
+            if self.sqrt_method == "legacy":
+                L, V = torch.linalg.eigh(sigma)
 
-            # Assuming PSD; account for numerical error
-            L.clamp_min_(0.0)
+                # Threshold used by torch.linalg.pinv
+                mask = L > (L[-1] * sigma.shape[-1] * torch.finfo(L.dtype).eps)
 
-            W = V * torch.where(mask, L.rsqrt(), 0.0) @ V.mH
-            W_inv = V * torch.where(mask, L.sqrt(), 0.0) @ V.mH
+                # Assuming PSD; account for numerical error
+                L.clamp_min_(0.0)
+
+                W = V * torch.where(mask, L.rsqrt(), 0.0) @ V.mH
+                W_inv = V * torch.where(mask, L.sqrt(), 0.0) @ V.mH
+            elif self.sqrt_method == "psd":
+                W, W_inv = psd_sqrt_rsqrt(sigma)
+            elif self.sqrt_method == "newton":
+                W, W_inv = newton_schulz_sqrt_rsqrt(sigma)
         else:
             W, W_inv = eye, eye
 
