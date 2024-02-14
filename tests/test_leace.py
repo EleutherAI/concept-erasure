@@ -1,4 +1,5 @@
 from itertools import pairwise, product
+from typing import Optional
 
 import numpy as np
 import pytest
@@ -21,16 +22,26 @@ from concept_erasure import (
 from concept_erasure.optimal_transport import is_positive_definite
 
 
-@pytest.mark.parametrize("shrinkage", [False, True])
 @pytest.mark.parametrize("dtype", [torch.float64, torch.complex128])
-def test_stats(shrinkage: bool, dtype: torch.dtype):
+@pytest.mark.parametrize("shrinkage", [False, True])
+@pytest.mark.parametrize("ema_beta", [None, 1.0])
+def test_stats(
+    dtype: torch.dtype,
+    shrinkage: bool, 
+    ema_beta: Optional[float],
+    ):
+
     batch_size = 10
     num_batches = 5
     num_classes = 2
     num_features = 3
     N = batch_size * num_batches
 
-    fitter = LeaceFitter(num_features, num_classes, dtype=dtype, shrinkage=shrinkage)
+    fitter = LeaceFitter(
+        num_features, num_classes, 
+        dtype=dtype, 
+        shrinkage=shrinkage, 
+        ema_beta=ema_beta)
     oracle = OracleFitter(num_features, num_classes, dtype=dtype, shrinkage=shrinkage)
 
     # Generate random data
@@ -89,6 +100,95 @@ def test_stats(shrinkage: bool, dtype: torch.dtype):
 
     torch.testing.assert_close(oracle.sigma_xz, expected_sigma_xz)
     torch.testing.assert_close(oracle.sigma_zz, expected_sigma_zz)
+
+
+@pytest.mark.parametrize("dtype", [torch.float64, torch.complex128])
+@pytest.mark.parametrize("shrinkage", [False, True])
+@pytest.mark.parametrize("ema_beta", [None, 0.9, 0.5])
+def test_stats_moments(
+    dtype: torch.dtype,
+    shrinkage: bool, 
+    ema_beta: Optional[float],
+    ):
+
+    batch_size = 10
+    num_batches = 5
+    num_classes = 2
+    num_features = 3
+
+    if ema_beta is None:
+        ema_beta = 1.0
+
+    # Construct EMA "effective sample size" weights
+    batch_weights = torch.pow(ema_beta, torch.arange(num_batches - 1, -1, -1))
+    sample_weights = batch_weights.outer(torch.ones(batch_size))
+    n_eff = sample_weights.sum(dim=1)
+    N_eff = n_eff.sum()
+
+    fitter = LeaceFitter(
+        num_features, num_classes, 
+        dtype=dtype, 
+        shrinkage=shrinkage, 
+        ema_beta=ema_beta)
+
+    # Generate random data
+    torch.manual_seed(42)
+    x_data = [
+        torch.randn(batch_size, num_features, dtype=dtype) for _ in range(num_batches)
+    ]
+    z_data = [
+        torch.randint(0, num_classes, (batch_size, num_classes))
+        for _ in range(num_batches)
+    ]
+    projections = []
+
+    # Compute cross-covariance matrix using batched updates
+    for x, z in zip(x_data, z_data):
+        fitter.update(x, z)
+        projections.append(fitter.eraser.P)
+
+    # Make sure the cached eraser is getting invalidated on update() correctly
+    for p1, p2 in pairwise(projections):
+        assert not torch.allclose(p1, p2)
+
+    # Compute the expected second moment matrix using the whole dataset
+    x_all = torch.cat(x_data)
+    z_all = torch.cat(z_data).type_as(x_all)
+    weights_all = torch.flatten(sample_weights).type_as(x_all)
+    mean_x = torch.einsum("b,bm->m", weights_all, x_all) / N_eff
+    mean_z = torch.einsum("b,bm->m", weights_all, z_all) / N_eff
+    # x_centered = x_all - mean_x
+    # z_centered = z_all - mean_z
+
+    expected_m2_xx = torch.einsum(
+        "b,bm,bn->mn", weights_all, x_all.conj(), x_all
+    )
+    expected_m2_zz = torch.einsum(
+        "b,bm,bn->mn", weights_all, z_all.conj(), z_all
+    )
+    expected_sigma_xx = expected_m2_xx - N_eff * torch.outer(mean_x.conj(), mean_x)
+    expected_sigma_zz = expected_m2_zz - N_eff * torch.outer(mean_z.conj(), mean_z)
+
+    if shrinkage:
+        expected_sigma_xx = optimal_linear_shrinkage(
+            expected_sigma_xx / N_eff, N_eff
+        )
+        expected_sigma_zz = optimal_linear_shrinkage(
+            expected_sigma_zz / N_eff, N_eff
+        )
+    else:
+        expected_sigma_xx /= N_eff - 1
+        expected_sigma_zz /= N_eff - 1
+
+    expected_m2_xz = torch.einsum(
+        "b,bm,bn->mn", weights_all, x_all.conj(), z_all
+    )
+
+    expected_sigma_xz = expected_m2_xz - N_eff * torch.outer(mean_x.conj(), mean_z)
+    expected_sigma_xz /= N_eff - 1
+
+    torch.testing.assert_close(fitter.sigma_xx, expected_sigma_xx)
+    torch.testing.assert_close(fitter.sigma_xz, expected_sigma_xz)
 
 
 def check_linear_guardedness(
