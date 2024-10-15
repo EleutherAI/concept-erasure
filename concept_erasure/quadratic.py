@@ -38,6 +38,14 @@ class QuadraticEraser:
         # Efficiently group `x` by `z`, optimally transport each group, then coalesce
         return groupby(x, z).map(self.optimal_transport).coalesce()
 
+    def to(self, device: torch.device | str) -> "QuadraticEraser":
+        """Move eraser to a new device."""
+        return QuadraticEraser(
+            self.class_means.to(device),
+            self.global_mean.to(device),
+            self.ot_maps.to(device),
+        )
+
 
 @dataclass(frozen=True)
 class QuadraticEditor:

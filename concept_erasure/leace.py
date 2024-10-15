@@ -46,6 +46,14 @@ class LeaceEraser:
         x_ = x - (delta @ self.proj_right.mH) @ self.proj_left.mH
         return x_.type_as(x)
 
+    def to(self, device: torch.device | str) -> "LeaceEraser":
+        """Move eraser to a new device."""
+        return LeaceEraser(
+            self.proj_left.to(device),
+            self.proj_right.to(device),
+            self.bias.to(device) if self.bias is not None else None,
+        )
+
 
 class LeaceFitter:
     """Fits an affine transform that surgically erases a concept from a representation.

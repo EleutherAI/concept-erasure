@@ -27,6 +27,10 @@ class OracleEraser:
 
         return x.sub(expected_x).type_as(x)
 
+    def to(self, device: torch.device | str) -> "OracleEraser":
+        """Move eraser to a new device."""
+        return OracleEraser(self.coef.to(device), self.mean_z.to(device))
+
 
 class OracleFitter:
     """Compute stats needed for surgically erasing a concept Z from a random vector X.
