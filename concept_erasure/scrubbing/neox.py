@@ -6,10 +6,12 @@ from datasets import Dataset
 from tqdm.auto import tqdm
 from transformers import (
     GPTNeoXForCausalLM,
-    GPTNeoXLayer,
     GPTNeoXModel,
 )
-from transformers.models.gpt_neox.modeling_gpt_neox import GPTNeoXAttention
+from transformers.models.gpt_neox.modeling_gpt_neox import (
+    GPTNeoXAttention,
+    GPTNeoXLayer,
+)
 
 from concept_erasure import ConceptScrubber, ErasureMethod, LeaceFitter
 from concept_erasure.utils import assert_type
