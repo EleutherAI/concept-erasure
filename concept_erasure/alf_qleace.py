@@ -243,33 +243,6 @@ class AlfQLeaceFitter:
             self.x_dim, device=self.global_mean_x.device, dtype=self.global_mean_x.dtype
         )
 
-        # Compute QLEACE component
-        # Compute the (covariance - mean covariance) matrix difference for each class
-        self.sigma_xx_z_.shape
-        mean_sigma_xx_z = self.sigma_xx_z_.mean(dim=0)
-        sigma_xx_z_diffs = self.sigma_xx_z_ - mean_sigma_xx_z
-
-        # Find the class that has the difference with the largest singular
-        # value (spectral norm)
-        svds: list[tuple[Tensor, Tensor, Tensor]] = [
-            torch.svd_lowrank(sigma_xx_z_diffs[i], q=1) for i in range(self.z_dim)
-        ]
-        spectral_norms = torch.stack([svd[1][0] for svd in svds])
-        z_idx = spectral_norms.argmax()
-
-        # Select the principal direction associated with the singular value
-        U, S, Vh = svds[z_idx]
-        principal_direction = U[:, 0]
-
-        # Projection collapses the principal direction
-        proj_qleace = eye - torch.outer(principal_direction, principal_direction)
-
-        assert torch.isclose(
-            principal_direction.norm(p=2), torch.tensor(1.0), rtol=1e-5
-        )
-        assert torch.allclose(proj_qleace @ proj_qleace, proj_qleace, rtol=1e-5)
-        del proj_qleace
-
         # Compute LEACE component
         # Compute the whitening and unwhitening matrices
         sigma = self.sigma_xx
@@ -330,6 +303,42 @@ class AlfQLeaceFitter:
                 u, s, vh = torch.linalg.svd(eye - P)
                 proj_left = u * s.sqrt()
                 proj_right = vh * s.sqrt()
+
+        # Compute ALF-Q component
+
+        # Apply LEACE to the class-conditional covariance matrices
+        eye = torch.eye(
+            proj_left.shape[0],
+            device=proj_left.device,
+            dtype=proj_left.dtype,
+        )
+        P = eye - proj_left @ proj_right
+
+        leaced_sigma_xx_z_ = torch.stack(
+            [P @ self.sigma_xx_z_[i] @ P for i in range(self.z_dim)]
+        )
+
+        # Compute the (covariance - mean covariance) matrix difference for each class
+        mean_sigma_xx_z = leaced_sigma_xx_z_.mean(dim=0)
+        sigma_xx_z_diffs = leaced_sigma_xx_z_ - mean_sigma_xx_z
+
+        # Find the class that has the difference with the largest singular value
+        batch_svd = torch.vmap(
+            lambda x: torch.svd_lowrank(x, q=1, niter=10), randomness="different"
+        )
+        U, S, Vh = batch_svd(sigma_xx_z_diffs)
+        max_idx = torch.argmax(S.squeeze())
+
+        # Save the first principal direction of the largest covariance difference
+        principal_direction = U.squeeze()[max_idx]
+        assert torch.isclose(
+            principal_direction.norm(p=2), torch.tensor(1.0), rtol=1e-5
+        )
+
+        # This projection collapses the principal direction
+        proj_qleace = eye - torch.outer(principal_direction, principal_direction)
+        assert torch.allclose(proj_qleace @ proj_qleace, proj_qleace, rtol=1e-5)
+        del proj_qleace
 
         return AlfQLeaceEraser(
             proj_left,
