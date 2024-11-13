@@ -28,7 +28,7 @@ class AlfQLeaceEraser:
     proj_left: Tensor
     proj_right: Tensor
     bias: Tensor | None
-    alf_qleace_vec: Tensor
+    alf_qleace_vecs: Tensor
 
     @classmethod
     def fit(cls, x: Tensor, z: Tensor, **kwargs) -> "AlfQLeaceEraser":
@@ -49,11 +49,11 @@ class AlfQLeaceEraser:
     def Q(self) -> Tensor:
         """The ALF-QLEACE projection matrix."""
         eye = torch.eye(
-            self.alf_qleace_vec.shape[0],
-            device=self.alf_qleace_vec.device,
-            dtype=self.alf_qleace_vec.dtype,
+            self.alf_qleace_vecs.shape[1],
+            device=self.alf_qleace_vecs.device,
+            dtype=self.alf_qleace_vecs.dtype,
         )
-        return eye - torch.outer(self.alf_qleace_vec, self.alf_qleace_vec)
+        return eye - (self.alf_qleace_vecs.mH @ self.alf_qleace_vecs)
 
     def __call__(self, x: Tensor) -> Tensor:
         """Apply the projection to the input tensor."""
@@ -63,8 +63,8 @@ class AlfQLeaceEraser:
         x_ = x - (delta @ self.proj_right.mH) @ self.proj_left.mH
 
         # Apply the ALF-QLEACE projection
-        v = self.alf_qleace_vec
-        x_ = x_ - torch.einsum("i,bi->bi", v, (v @ x_.mH).unsqueeze(1))
+        v = self.alf_qleace_vecs
+        x_ = x_ - (v @ x.mH).mH @ v
 
         return x_.type_as(x)
 
@@ -74,7 +74,7 @@ class AlfQLeaceEraser:
             self.proj_left.to(device),
             self.proj_right.to(device),
             self.bias.to(device) if self.bias is not None else None,
-            self.alf_qleace_vec.to(device),
+            self.alf_qleace_vecs.to(device),
         )
 
 
@@ -239,6 +239,7 @@ class AlfQLeaceFitter:
     @cached_property
     def eraser(self) -> AlfQLeaceEraser:
         """Erasure function lazily computed given the current statistics."""
+        n_dims = 10
         eye = torch.eye(
             self.x_dim, device=self.global_mean_x.device, dtype=self.global_mean_x.dtype
         )
@@ -314,37 +315,37 @@ class AlfQLeaceFitter:
         )
         P = eye - proj_left @ proj_right
 
-        leaced_sigma_xx_z_ = torch.stack(
+        transformed_sigma_xx_z_ = torch.stack(
             [P @ self.sigma_xx_z_[i] @ P for i in range(self.z_dim)]
         )
 
-        # Compute the (covariance - mean covariance) matrix difference for each class
-        mean_sigma_xx_z = leaced_sigma_xx_z_.mean(dim=0)
-        sigma_xx_z_diffs = leaced_sigma_xx_z_ - mean_sigma_xx_z
+        principal_directions = []
+        for _ in range(n_dims):
+            # Compute the class conditional covariance differences from the mean
+            mean_sigma_xx_z = transformed_sigma_xx_z_.mean(dim=0)
+            sigma_xx_z_diffs = transformed_sigma_xx_z_ - mean_sigma_xx_z
 
-        # Find the class that has the difference with the largest singular value
-        batch_svd = torch.vmap(
-            lambda x: torch.svd_lowrank(x, q=1, niter=10), randomness="different"
-        )
-        U, S, Vh = batch_svd(sigma_xx_z_diffs)
-        max_idx = torch.argmax(S.squeeze())
+            batch_svd = torch.vmap(
+                lambda x: torch.svd_lowrank(x, q=1, niter=10), randomness="different"
+            )
+            U, S, Vh = batch_svd(sigma_xx_z_diffs)
 
-        # Save the first principal direction of the largest covariance difference
-        principal_direction = U.squeeze()[max_idx]
-        assert torch.isclose(
-            principal_direction.norm(p=2), torch.tensor(1.0), rtol=1e-5
-        )
+            max_idx = torch.argmax(S.squeeze())
+            principal_directions.append(U.squeeze()[max_idx])
 
-        # This projection collapses the principal direction
-        proj_qleace = eye - torch.outer(principal_direction, principal_direction)
-        assert torch.allclose(proj_qleace @ proj_qleace, proj_qleace, rtol=1e-5)
-        del proj_qleace
+            # Transform the class-conditional covariance matrices for the next iteration
+            proj_qleace = eye - torch.outer(
+                principal_directions[-1], principal_directions[-1]
+            )
+            transformed_sigma_xx_z_ = torch.stack(
+                [proj_qleace @ sigma @ proj_qleace for sigma in transformed_sigma_xx_z_]
+            )
 
         return AlfQLeaceEraser(
             proj_left,
             proj_right,
             bias=self.global_mean_x if self.affine else None,
-            alf_qleace_vec=principal_direction,
+            alf_qleace_vecs=torch.stack(principal_directions),
         )
 
     @property
