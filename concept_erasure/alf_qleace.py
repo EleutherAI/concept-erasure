@@ -54,6 +54,7 @@ class AlfQLeaceEraser:
 
     def __call__(self, x: Tensor) -> Tensor:
         """Apply the projection to the input tensor."""
+        # Delta comes from the mean centered input distribution
         delta = x - self.bias if self.bias is not None else x
 
         # Ensure we do the matmul in the most efficient order.
@@ -61,18 +62,18 @@ class AlfQLeaceEraser:
 
         # Apply the ALF-QLEACE projection
         v = self.alf_qleace_vecs
-        x_ = x_ - (v @ x.mH).mH @ v
+        x_ = x_ - (v @ x_.mH).mH @ v
 
         return x_.type_as(x)
 
     def to(self, device: torch.device | str) -> "AlfQLeaceEraser":
         """Move eraser to a new device."""
-        self.proj_left = self.proj_left.to(device)
-        self.proj_right = self.proj_right.to(device)
-        self.bias = self.bias.to(device) if self.bias is not None else None
-        self.alf_qleace_vecs = self.alf_qleace_vecs.to(device)
-
-        return self
+        return AlfQLeaceEraser(
+            self.proj_left.to(device),
+            self.proj_right.to(device),
+            self.bias.to(device) if self.bias is not None else None,
+            self.alf_qleace_vecs.to(device),
+        )
 
 
 class AlfQLeaceFitter:
