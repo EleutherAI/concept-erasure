@@ -59,10 +59,7 @@ class AlfQLeaceEraser:
 
         # Ensure we do the matmul in the most efficient order.
         x_ = x - (delta @ self.proj_right.mH) @ self.proj_left.mH
-
-        # Apply the ALF-QLEACE projection
-        v = self.alf_qleace_vecs
-        x_ = x_ - (v @ x_.mH).mH @ v
+        x_ = x_ - (x_ @ self.alf_qleace_vecs.mH) @ self.alf_qleace_vecs
 
         return x_.type_as(x)
 
