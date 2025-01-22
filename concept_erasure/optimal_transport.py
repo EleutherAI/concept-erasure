@@ -12,14 +12,16 @@ def is_positive_definite(A: Tensor) -> Tensor:
 @torch.jit.script
 def psd_sqrt(A: Tensor) -> Tensor:
     """Compute the unique p.s.d. square root of a positive semidefinite matrix."""
-    L, U = torch.linalg.eigh(A)
+    L, U = torch.linalg.eigh(A.double())
+    L, U = L.to(A.dtype), U.to(A.dtype)
     L = L[..., None, :].clamp_min(0.0)
     return U * L.sqrt() @ U.mH
 
 
 def psd_sqrt_rsqrt(A: Tensor) -> tuple[Tensor, Tensor]:
     """Efficiently compute both the p.s.d. sqrt & pinv sqrt of p.s.d. matrix `A`."""
-    L, U = torch.linalg.eigh(A)
+    L, U = torch.linalg.eigh(A.double())
+    L, U = L.to(A.dtype), U.to(A.dtype)
     L = L[..., None, :].clamp_min(0.0)
 
     # Square root is easy

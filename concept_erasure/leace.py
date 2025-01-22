@@ -192,7 +192,9 @@ class LeaceFitter:
         # Compute the whitening and unwhitening matrices
         if self.method == "leace":
             sigma = self.sigma_xx
-            L, V = torch.linalg.eigh(sigma)
+            L, V = torch.linalg.eigh(sigma.double())
+            L, V = L.to(sigma.dtype), V.to(sigma.dtype)
+            torch.allclose(sigma, sigma.T, rtol=1e-05, atol=1e-08)
 
             # Threshold used by torch.linalg.pinv
             mask = L > (L[-1] * sigma.shape[-1] * torch.finfo(L.dtype).eps)
@@ -278,3 +280,15 @@ class LeaceFitter:
         """The cross-covariance matrix."""
         assert self.n > 1, "Call update() with labels before accessing sigma_xz"
         return self.sigma_xz_ / (self.n - 1)
+
+    def to(self, device: str | torch.device | None = None) -> "LeaceFitter":
+        """Move the fitter to a new device."""
+        self.mean_x = self.mean_x.to(device)
+        self.mean_z = self.mean_z.to(device)
+        self.sigma_xz_ = self.sigma_xz_.to(device)
+        self.n = self.n.to(device)
+
+        if self.n > 1 and self.sigma_xx_ is not None:
+            self.sigma_xx_ = self.sigma_xx_.to(device)
+
+        return self
