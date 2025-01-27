@@ -208,3 +208,11 @@ class QuadraticFitter:
         # Just apply Bessel's correction
         else:
             return S_hat / (n - 1)
+
+    def to(self, device: torch.device | str) -> "QuadraticFitter":
+        """Move fitter to a new device."""
+        self.mean_x = self.mean_x.to(device)
+        self.n = self.n.to(device)
+        self.sigma_xx_ = self.sigma_xx_.to(device)
+
+        return self

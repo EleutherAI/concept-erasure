@@ -1,3 +1,4 @@
+from .alf_qleace import AlfQLeaceEraser, AlfQLeaceFitter
 from .concept_scrubber import ConceptScrubber
 from .groupby import GroupedTensor, groupby
 from .leace import ErasureMethod, LeaceEraser, LeaceFitter
@@ -24,4 +25,6 @@ __all__ = [
     "QuadraticEraser",
     "QuadraticFitter",
     "QuantileNormalizer",
+    "AlfQLeaceEraser",
+    "AlfQLeaceFitter",
 ]
